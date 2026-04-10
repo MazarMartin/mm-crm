@@ -2437,6 +2437,9 @@ function buildDashboard() {
 
   html += `<div style="text-align:right;margin-top:10px"><button class="btn-sm btn-gold" onclick="showTab('mmreport')">View full report →</button></div>`;
 
+  // ── Rolling 7-day Price Changes card (catches reductions outside current week) ──
+  html += buildRecentPriceChangesCard(7);
+
   // ── This Week Breakdown (Mon–Sun) with clickable rows ──
   if (typeof propingHistory !== 'undefined' && propingHistory.length) {
     const now = new Date();
@@ -2455,7 +2458,7 @@ function buildDashboard() {
         if (day.date !== ds) continue;
         for (const x of (day.newly_listed||[])) { nl++; nlItems.push(x); }
         for (const pc of (day.price_changes||[])) {
-          const ch = (pc.price_change||'').replace(/[^0-9\\-\\+]/g,'');
+          const ch = (pc.price_change||'').replace(/[^0-9\-+]/g,'');
           if (ch && parseInt(ch) < 0) { pd++; pdItems.push(pc); }
           else if (ch && parseInt(ch) > 0) { pi++; piItems.push(pc); }
         }
