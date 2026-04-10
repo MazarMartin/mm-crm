@@ -4348,6 +4348,169 @@ function _sortByDateDesc(arr, field) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PROPING ACTIVITY HELPERS  (reused by For Sale / Sold / MM Report)
+// ═══════════════════════════════════════════════════════════════════════════════
+function _collectRecentPriceChanges(days) {
+  // Returns {down:[], up:[]} sorted newest first from propingHistory (last `days` days)
+  if (typeof propingHistory === 'undefined' || !propingHistory.length) return {down:[], up:[]};
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - (days||7));
+  const parseD = s => { try { const [d,m,y]=s.split('/'); return new Date(+y,+m-1,+d); } catch(_){ return null; } };
+  const down = [], up = [];
+  for (const day of propingHistory) {
+    const dt = parseD(day.date);
+    if (!dt || dt < cutoff) continue;
+    for (const pc of (day.price_changes||[])) {
+      const ch = (pc.price_change||'').trim();
+      if (!ch) continue;
+      const item = {...pc, _day: day.date, _dt: dt};
+      if (ch.startsWith('-')) down.push(item);
+      else if (ch.startsWith('+')) up.push(item);
+    }
+  }
+  down.sort((a,b) => b._dt - a._dt);
+  up.sort((a,b) => b._dt - a._dt);
+  return {down, up};
+}
+
+function _collectRecentSold(days) {
+  if (typeof propingHistory === 'undefined' || !propingHistory.length) return [];
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - (days||7));
+  const parseD = s => { try { const [d,m,y]=s.split('/'); return new Date(+y,+m-1,+d); } catch(_){ return null; } };
+  const out = [];
+  for (const day of propingHistory) {
+    const dt = parseD(day.date);
+    if (!dt || dt < cutoff) continue;
+    for (const s of (day.sold||[])) {
+      out.push({...s, _day: day.date, _dt: dt});
+    }
+  }
+  out.sort((a,b) => b._dt - a._dt);
+  return out;
+}
+
+function _propingLink(p) {
+  const url = p.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((p.address||'') + ', NSW, Australia'));
+  return `<a href="${url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${p.address||'—'}</a>`;
+}
+
+function buildRecentPriceChangesCard(days) {
+  days = days || 7;
+  const {down, up} = _collectRecentPriceChanges(days);
+  if (!down.length && !up.length) return '';
+  // Group by day
+  const byDay = {};
+  [...down, ...up].forEach(pc => {
+    (byDay[pc._day] = byDay[pc._day] || []).push(pc);
+  });
+  const dayOrder = Object.keys(byDay).sort((a,b) => {
+    const pa = a.split('/').reverse().join(''), pb = b.split('/').reverse().join('');
+    return pb.localeCompare(pa);
+  });
+  // Day-of-week label
+  const dow = (s) => {
+    try { const [d,m,y] = s.split('/'); return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(+y,+m-1,+d).getDay()]; }
+    catch(_) { return ''; }
+  };
+
+  let h = `<div class="card" style="margin-bottom:16px;border-left:4px solid #C62828">
+    <div class="card-title" style="display:flex;align-items:center;gap:10px">
+      <span>📉 Recent Price Changes (last ${days} days)</span>
+      <span class="badge badge-red" style="font-size:11px">${down.length} reduced</span>
+      ${up.length ? `<span class="badge badge-green" style="font-size:11px">${up.length} increased</span>` : ''}
+    </div>
+    <div class="table-wrap" style="margin-top:10px"><table><thead><tr>
+      <th style="text-align:left">Day</th>
+      <th style="text-align:left">Address</th>
+      <th>Suburb</th>
+      <th>Guide</th>
+      <th>Change</th>
+      <th>Agent</th>
+    </tr></thead><tbody>`;
+  for (const day of dayOrder) {
+    const items = byDay[day];
+    items.sort((a,b) => {
+      // down first
+      const da = (a.price_change||'').startsWith('-') ? 0 : 1;
+      const db = (b.price_change||'').startsWith('-') ? 0 : 1;
+      return da - db;
+    });
+    items.forEach((pc, idx) => {
+      const ch = pc.price_change || '';
+      const isDown = ch.startsWith('-');
+      const chClass = isDown ? 'color:#C62828;font-weight:700' : 'color:#2E7D32;font-weight:700';
+      const arrow = isDown ? '▼' : '▲';
+      const dayCell = idx === 0 ? `<td style="font-size:11px;font-weight:600;color:var(--text-light);white-space:nowrap">${dow(day)} ${day}</td>` : `<td></td>`;
+      h += `<tr>
+        ${dayCell}
+        <td style="font-weight:600">${_propingLink(pc)}</td>
+        <td><span class="suburb-pill">${pc.suburb||'—'}</span></td>
+        <td style="color:var(--green);font-weight:600">${pc.price||'—'}</td>
+        <td style="${chClass};white-space:nowrap">${arrow} ${ch}</td>
+        <td style="font-size:11px;color:var(--text-mid)">${pc.agent||'—'}${pc.agency?' / '+pc.agency:''}</td>
+      </tr>`;
+    });
+  }
+  h += `</tbody></table></div></div>`;
+  return h;
+}
+
+function buildRecentSoldCard(days) {
+  days = days || 7;
+  const sold = _collectRecentSold(days);
+  if (!sold.length) return '';
+  // Group by day
+  const byDay = {};
+  sold.forEach(s => { (byDay[s._day] = byDay[s._day] || []).push(s); });
+  const dayOrder = Object.keys(byDay).sort((a,b) => {
+    const pa = a.split('/').reverse().join(''), pb = b.split('/').reverse().join('');
+    return pb.localeCompare(pa);
+  });
+  const dow = (s) => {
+    try { const [d,m,y] = s.split('/'); return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(+y,+m-1,+d).getDay()]; }
+    catch(_) { return ''; }
+  };
+  // Count known vs withheld
+  const withheld = sold.filter(s => (s.sold_price||s.price||'').includes('Withheld') || !(s.sold_price||s.price)).length;
+  const known = sold.length - withheld;
+
+  let h = `<div class="card" style="margin-bottom:16px;border-left:4px solid #1565C0">
+    <div class="card-title" style="display:flex;align-items:center;gap:10px">
+      <span>✅ Recently Sold — Proping (last ${days} days)</span>
+      <span class="badge badge-blue" style="font-size:11px">${sold.length} sales</span>
+      ${known ? `<span class="badge badge-green" style="font-size:11px">${known} price known</span>` : ''}
+      ${withheld ? `<span class="badge badge-gray" style="font-size:11px">${withheld} withheld</span>` : ''}
+    </div>
+    <div class="table-wrap" style="margin-top:10px"><table><thead><tr>
+      <th style="text-align:left">Day</th>
+      <th style="text-align:left">Address</th>
+      <th>Suburb</th>
+      <th>Guide</th>
+      <th>Sold</th>
+      <th>Agent</th>
+    </tr></thead><tbody>`;
+  for (const day of dayOrder) {
+    const items = byDay[day];
+    items.forEach((s, idx) => {
+      const soldP = s.sold_price || s.price || 'Price Withheld';
+      const guide = s.price_guide || '—';
+      const isWithheld = (soldP||'').includes('Withheld');
+      const soldClass = isWithheld ? 'color:var(--text-mid)' : 'color:#1565C0;font-weight:700';
+      const dayCell = idx === 0 ? `<td style="font-size:11px;font-weight:600;color:var(--text-light);white-space:nowrap">${dow(day)} ${day}</td>` : `<td></td>`;
+      h += `<tr>
+        ${dayCell}
+        <td style="font-weight:600">${_propingLink(s)}</td>
+        <td><span class="suburb-pill">${s.suburb||'—'}</span></td>
+        <td style="font-size:11px;color:var(--text-mid)">${guide}</td>
+        <td style="${soldClass}">${soldP}</td>
+        <td style="font-size:11px;color:var(--text-mid)">${s.agent||'—'}${s.agency?' / '+s.agency:''}</td>
+      </tr>`;
+    });
+  }
+  h += `</tbody></table></div></div>`;
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FOR SALE TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildForSaleTab() {
@@ -4360,6 +4523,7 @@ function buildForSaleTab() {
   el.innerHTML = `
     <div class="page-title">For Sale</div>
     <div class="page-sub">${all.length} active listings across the Lower North Shore</div>
+    ${buildRecentPriceChangesCard(7)}
     <div class="filter-bar">
       <div class="filter-group"><label>Suburb</label><select id="fs-suburb" onchange="filterForSale()"><option value="">All Suburbs</option>${suburbs.map(s=>`<option>${s}</option>`).join('')}</select></div>
       <div class="filter-group"><label>Type</label><select id="fs-type" onchange="filterForSale()"><option value="">All Types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select></div>
@@ -4929,6 +5093,7 @@ function buildSoldTab() {
   el.innerHTML = `
     <div class="page-title">Sold Properties</div>
     <div class="page-sub">${(D.soldListings||[]).length} recent sales across the Lower North Shore</div>
+    ${buildRecentSoldCard(7)}
     <div class="filter-bar">
       <div class="filter-group"><label>Suburb</label><select id="sold-suburb" onchange="filterSold()"><option value="">All Suburbs</option>${suburbs.map(s=>`<option>${s}</option>`).join('')}</select></div>
       <div class="filter-group"><label>Type</label><select id="sold-type" onchange="filterSold()"><option value="">All Types</option>${types.map(t=>`<option>${t}</option>`).join('')}</select></div>
@@ -5219,6 +5384,9 @@ function buildMMReportTab() {
         <option value="">All Activity</option><option value="price_changes">Price Changes</option><option value="newly_listed">Newly Listed</option><option value="sold">Sold</option><option value="auction_changes">Auction Changes</option><option value="unlisted">Unlisted</option><option value="over_90_days">90+ Days</option>
       </select></div>
     </div>
+
+    ${buildRecentPriceChangesCard(7)}
+    ${buildRecentSoldCard(7)}
 
     <div id="mmr-snapshot" class="section-content active"></div>
     <div id="mmr-daily" class="section-content"></div>`;
@@ -6559,7 +6727,7 @@ D.upcomingAuctions = [
     "auctionDate": "2026-04-16T09:00:00",
     "type": "ApartmentUnitFlat",
     "cancelled": false,
-    "comments": "Auction brought forward to 16 Apr (-14 days) \u2014 (Proping) | Auction brought forward to 16 Apr (-14 days) \u2014 (Proping)"
+    "comments": "Auction brought forward to 16 Apr (-14 days) \u2014 (Proping) | Auction brought forward to 16 Apr (-14 days) \u2014 (Proping 09/04/2026)"
   },
   {
     "address": "2507/1 Sergeants Lane, St Leonards",
@@ -7629,7 +7797,7 @@ D.upcomingAuctions = [
     "auctionDate": "",
     "type": "ApartmentUnitFlat",
     "cancelled": true,
-    "comments": "Auction removed \u2014 09/04/2026 (Proping) | Auction removed \u2014 09/04/2026 (Proping)"
+    "comments": "Auction removed \u2014 09/04/2026 (Proping)"
   },
   {
     "address": "202/31 Bertram Street, Chatswood",
@@ -7858,6 +8026,38 @@ D.upcomingAuctions = [
     "auctionDate": "2026-04-18T16:00:00",
     "type": "ApartmentUnitFlat",
     "cancelled": false
+  },
+  {
+    "address": "31/224-230 Ben Boyd Road, Cremorne",
+    "suburb": "Cremorne",
+    "beds": "3",
+    "baths": "",
+    "parking": "",
+    "guide": "$2,000,000",
+    "price": "Auction Guide: $2,000,000",
+    "auctionDate": "2026-04-16T09:00:00",
+    "type": "House",
+    "cancelled": false,
+    "source": "proping",
+    "agent": "Irene Low",
+    "agency": "Belle Property Neutral Bay",
+    "comments": "Auction Date Added (16 Apr) \u2014 (Proping 10/04/2026)"
+  },
+  {
+    "address": "12 Margaret Street, North Sydney",
+    "suburb": "North Sydney",
+    "beds": "3",
+    "baths": "",
+    "parking": "",
+    "guide": "$2,800,000",
+    "price": "Auction Guide: $2,800,000",
+    "auctionDate": "2026-05-07T09:00:00",
+    "type": "House",
+    "cancelled": false,
+    "source": "proping",
+    "agent": "Ben Markos",
+    "agency": "Ray White Lower North Shore Group",
+    "comments": "Auction Pushed Out 28 Days (to 07 May) \u2014 (Proping 10/04/2026)"
   }
 ];
 // __UPCOMING_AUCTIONS_END__
