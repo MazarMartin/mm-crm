@@ -1,5 +1,5 @@
 // Mazar Martin PWA Service Worker
-const CACHE_NAME = 'mm-cache-v1';
+const CACHE_NAME = 'mm-cache-v2';
 const ASSETS = [
   '/',
   '/index.html',
