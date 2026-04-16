@@ -8639,10 +8639,18 @@ function renderMMReport() {
         const label = dailyLabels[section] || section;
         const badgeClass = dailyBadges[section] || 'badge-blue';
         dailyHtml += `<div style="margin:8px 0 4px;font-weight:600;font-size:12px"><span class="badge ${badgeClass}">${label} (${items.length})</span></div>`;
-        dailyHtml += '<div class="table-wrap" style="margin-bottom:8px"><table><thead><tr><th>Address</th><th>Suburb</th><th>Price</th><th>Agent</th><th>Details</th></tr></thead><tbody>';
+        dailyHtml += '<div class="table-wrap" style="margin-bottom:8px"><table><thead><tr><th>Address</th><th>Suburb</th><th>Type</th><th>Bd/Ba/Car</th><th>Land</th><th>Zoning</th><th>Price</th><th>Agent</th><th>Details</th></tr></thead><tbody>';
         items.forEach(p => {
           const detail = p.auction_change || p.price_change || (p.days_listed ? p.days_listed + ' days' : '') || '';
-          dailyHtml += `<tr><td style="font-weight:600">${p.address||'—'}</td><td><span class="suburb-pill">${p.suburb||''}</span></td><td style="font-weight:600">${p.price||p.sold_price||'—'}</td><td style="font-size:11px">${p.agent||''} ${p.agency?'/ '+p.agency:''}</td><td style="font-size:11px;color:var(--text-mid)">${detail}</td></tr>`;
+          const addrHtml = p.url ? `<a href="${p.url}" target="_blank" style="color:var(--primary);text-decoration:none">${p.address||'—'}</a>` : (p.address||'—');
+          const bbc = [p.beds||'–', p.baths||'–', p.parking||'–'].join('/');
+          const zoning = p.zoning ? p.zoning.split(':')[0] : '';
+          const zoningFlags = [];
+          if (p.heritage)     zoningFlags.push('<span style="color:#C62828;font-size:10px">H</span>');
+          if (p.conservation) zoningFlags.push('<span style="color:#6A1B9A;font-size:10px">C</span>');
+          if (p.easements)    zoningFlags.push('<span style="color:#F57F17;font-size:10px">E</span>');
+          const zoningCell = zoning + (p.fsr?' · FSR '+p.fsr:'') + (zoningFlags.length?' '+zoningFlags.join(' '):'');
+          dailyHtml += `<tr><td style="font-weight:600">${addrHtml}</td><td><span class="suburb-pill">${p.suburb||''}</span></td><td style="font-size:11px;color:var(--text-mid)">${p.propertyType||'—'}</td><td style="font-size:11px">${bbc}</td><td style="font-size:11px">${p.landSize||'—'}</td><td style="font-size:11px">${zoningCell||'—'}</td><td style="font-weight:600">${p.price||p.sold_price||'—'}</td><td style="font-size:11px">${p.agent||''} ${p.agency?'/ '+p.agency:''}</td><td style="font-size:11px;color:var(--text-mid)">${detail}</td></tr>`;
         });
         dailyHtml += '</tbody></table></div>';
       }
