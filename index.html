@@ -8819,11 +8819,11 @@ function _syncPropingToTabs() {
           suburb: nl.suburb || '',
           address: nl.address,
           price: nl.price || '',
-          propertyType: '',
+          propertyType: nl.propertyType || '',
           beds: nl.beds || '',
           baths: nl.baths || '',
-          parking: '',
-          landSize: '',
+          parking: nl.parking || '',
+          landSize: nl.landSize || '',
           tagText: 'New',
           agencyName: nl.agency || '',
           agentNames: nl.agent || '',
@@ -8833,7 +8833,13 @@ function _syncPropingToTabs() {
           propertyDetail: (nl.beds||'') + ' beds',
           days_listed: nl.days_listed || '',
           listDate: day.date,
-          url: nl.domain_url || ''
+          url: nl.url || nl.domain_url || '',
+          zoning: nl.zoning || '',
+          fsr: nl.fsr || '',
+          heightLimit: nl.heightLimit || '',
+          heritage: nl.heritage || false,
+          conservation: nl.conservation || false,
+          easements: nl.easements || null
         });
         fsNorms.add(k);
         addedFS++;
@@ -8843,12 +8849,18 @@ function _syncPropingToTabs() {
         if (existing) {
           if (!existing._propingDate) existing._propingDate = day.date;
           if (!existing.listDate) existing.listDate = day.date;
-          // Fill missing fields from Proping
+          // Fill missing fields from Proping (including enriched baths/car/type/url)
           if (nl.price && !existing.guidePrice) { existing.guidePrice = nl.price; existing.price = nl.price; }
           if (nl.agency && !existing.agencyName) existing.agencyName = nl.agency;
           if (nl.agent && !existing.agentNames) existing.agentNames = nl.agent;
           if (nl.beds && !existing.beds) existing.beds = nl.beds;
-          if (nl.domain_url && !existing.url) existing.url = nl.domain_url;
+          if (nl.baths && !existing.baths) existing.baths = nl.baths;
+          if (nl.parking && !existing.parking) existing.parking = nl.parking;
+          if (nl.propertyType && !existing.propertyType) existing.propertyType = nl.propertyType;
+          if (nl.landSize && !existing.landSize) existing.landSize = nl.landSize;
+          if ((nl.url || nl.domain_url) && !existing.url) existing.url = nl.url || nl.domain_url;
+          if (nl.zoning && !existing.zoning) existing.zoning = nl.zoning;
+          if (nl.fsr && !existing.fsr) existing.fsr = nl.fsr;
         }
       }
     }
@@ -8882,11 +8894,11 @@ function _syncPropingToTabs() {
           suburb: pc.suburb || '',
           address: pc.address,
           price: pc.price || '',
-          propertyType: '',
+          propertyType: pc.propertyType || '',
           beds: pc.beds || '',
           baths: pc.baths || '',
-          parking: '',
-          landSize: '',
+          parking: pc.parking || '',
+          landSize: pc.landSize || '',
           tagText: '',
           agencyName: pc.agency || '',
           agentNames: pc.agent || '',
@@ -8895,7 +8907,9 @@ function _syncPropingToTabs() {
           auctionDetail: '',
           propertyDetail: (pc.beds||'') + ' beds',
           listDate: day.date,
-          url: pc.domain_url || ''
+          url: pc.url || pc.domain_url || '',
+          zoning: pc.zoning || '',
+          fsr: pc.fsr || ''
         });
         fsNorms.add(k);
         addedFS++;
@@ -8916,6 +8930,10 @@ function _syncPropingToTabs() {
           else if (s.price && !existing.guidePrice) existing.guidePrice = s.price;
           if (s.beds && !existing.beds) existing.beds = s.beds;
           if (s.baths && !existing.baths) existing.baths = s.baths;
+          if (s.parking && !existing.parking) existing.parking = s.parking;
+          if (s.propertyType && !existing.propertyType) existing.propertyType = s.propertyType;
+          if (s.landSize && !existing.landSize) existing.landSize = s.landSize;
+          if ((s.url || s.domain_url) && !existing.url) existing.url = s.url || s.domain_url;
           if (s.agency && !existing.agencyName) existing.agencyName = s.agency;
           if (s.agent && !existing.agentNames) existing.agentNames = s.agent;
           if (s.method && !existing.method) existing.method = s.method;
@@ -8944,11 +8962,11 @@ function _syncPropingToTabs() {
           soldPrice: soldPrice,
           method: s.method || '',
           soldDate: day.date.split('/').reverse().join('-'),
-          propertyType: '',
+          propertyType: s.propertyType || '',
           beds: s.beds || '',
           baths: s.baths || '',
-          parking: '',
-          landSize: '',
+          parking: s.parking || '',
+          landSize: s.landSize || '',
           agencyName: s.agency || '',
           agentNames: s.agent || '',
           guidePrice: guide,
@@ -8957,7 +8975,10 @@ function _syncPropingToTabs() {
           days_listed: s.days_listed || '',
           daysOnMarket: parseInt(s.days_listed) || '',
           priceDiff: priceDiff,
-          pctChange: pctChange
+          pctChange: pctChange,
+          url: s.url || s.domain_url || '',
+          zoning: s.zoning || '',
+          fsr: s.fsr || ''
         });
         soldNorms.add(k);
         addedSold++;
