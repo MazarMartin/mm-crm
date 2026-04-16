@@ -571,6 +571,168 @@ button:active, .btn:active { transform: scale(0.98) translateY(1px); }
 }
 .login-btn:hover { background: #2D5A40; }
 .login-error { color: #FF5252; font-size: 12px; margin-top: 12px; min-height: 18px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Swipe Deck — per-client Match Summary (Active Buyers, last 7 days)
+   ═══════════════════════════════════════════════════════════════════════ */
+.sw-deck-wrap { position: relative; }
+.sw-deck-head {
+  display:flex; justify-content:space-between; align-items:center;
+  margin: 6px 0 10px;
+}
+.sw-deck-head .sw-count {
+  font-size: 11px; text-transform: uppercase; letter-spacing:.5px;
+  color: var(--text-light); font-weight: 600;
+}
+.sw-deck-head .sw-remain {
+  font-weight: 800; color: var(--green); font-family: 'Cormorant Garamond', serif;
+  font-size: 15px;
+}
+.sw-legend {
+  display:flex; justify-content:space-between; align-items:center;
+  padding: 8px 14px; background: var(--surface-warm);
+  border:1px solid var(--border-light); border-radius: var(--r-pill);
+  margin-bottom: 14px; font-size: 11px; font-weight:600;
+}
+.sw-legend .l { color: #D32F2F; }
+.sw-legend .r { color: var(--green); }
+.sw-legend .arrow { color: var(--text-light); }
+.sw-controls {
+  display:flex; gap:10px; justify-content:center; align-items:center;
+  margin-bottom: 12px;
+}
+.sw-btn {
+  flex:1; max-width:180px; padding: 11px 18px; border-radius: var(--r-pill);
+  border: 2px solid; background: var(--white); cursor: pointer;
+  font-weight: 700; font-size: 13px; letter-spacing: .3px;
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  transition: all .15s;
+}
+.sw-btn.pass    { color:#D32F2F; border-color:#D32F2F; }
+.sw-btn.present { color: var(--green); border-color: var(--green); }
+.sw-btn.pass:hover    { background:#FFEBEE; }
+.sw-btn.present:hover { background: var(--green-soft, #E8F0EB); }
+.sw-btn:disabled { opacity:.3; cursor:not-allowed; }
+
+.sw-stack { position: relative; height: 600px; margin: 0 auto; max-width: 460px; }
+.sw-card {
+  position: absolute; top:0; left:0; right:0;
+  background: var(--white); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 10px 32px rgba(0,0,0,.14);
+  transition: transform .3s cubic-bezier(.175,.885,.32,1.275), opacity .3s;
+  user-select: none;
+}
+.sw-card[data-depth="0"] { z-index: 5; cursor: grab; }
+.sw-card[data-depth="0"].dragging { cursor: grabbing; transition: none; }
+.sw-card[data-depth="1"] { transform: translateY(8px) scale(.97); z-index: 4; }
+.sw-card[data-depth="2"] { transform: translateY(16px) scale(.94); z-index: 3; }
+.sw-card[data-depth="3"] { transform: translateY(22px) scale(.92); z-index: 2; opacity:.85; }
+.sw-card[data-depth="4"] { transform: translateY(28px) scale(.90); z-index: 1; opacity:.7; }
+.sw-card.gone { pointer-events: none; }
+
+.sw-photo {
+  position: relative; height: 260px;
+  background: #e8e4db center/cover no-repeat;
+  display:flex; align-items:flex-end; padding: 14px 16px;
+}
+.sw-photo::before {
+  content:''; position:absolute; inset:0;
+  background: linear-gradient(to top, rgba(0,0,0,.75) 0%, rgba(0,0,0,.35) 40%, rgba(0,0,0,0) 75%);
+  transition: opacity .2s;
+}
+.sw-photo.floor {
+  background-color: #f5f5f0; background-size: contain; background-position: center;
+}
+.sw-photo.floor::before { opacity: 0; }
+.sw-photo.loading {
+  background: linear-gradient(90deg, #e8e4db 0%, #d6d0c5 50%, #e8e4db 100%);
+  background-size: 200% 100%;
+  animation: sw-shimmer 1.4s infinite;
+}
+@keyframes sw-shimmer { 0%{background-position:200% 0}100%{background-position:-200% 0} }
+
+.sw-src-badge {
+  position: absolute; top: 14px; left: 14px;
+  padding: 4px 10px; border-radius: var(--r-pill);
+  font-size: 9px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+  background: rgba(255,255,255,.92); color: var(--green);
+}
+.sw-src-badge.offmkt { background: var(--orange); color: var(--white); }
+.sw-src-badge.new    { background: var(--green);  color: var(--white); }
+.sw-toggle {
+  position: absolute; top: 14px; right: 14px;
+  display:flex; gap:0; border-radius: var(--r-pill); overflow: hidden;
+  background: rgba(255,255,255,.92);
+}
+.sw-toggle button {
+  padding: 5px 10px; border: none; background: transparent; cursor: pointer;
+  font-size: 9px; font-weight: 700; letter-spacing: .4px;
+  color: var(--text-mid); text-transform: uppercase;
+}
+.sw-toggle button.active { background: var(--green); color: var(--white); }
+
+.sw-price {
+  position: relative; font-family: 'Cormorant Garamond', serif;
+  font-size: 30px; font-weight: 600; color: var(--white); letter-spacing: -.5px;
+}
+.sw-dots {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  display:flex; gap: 4px;
+}
+.sw-dots span { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.4); }
+.sw-dots span.active { background: var(--white); }
+
+.sw-overlay {
+  position: absolute; top: 36px; opacity: 0; pointer-events: none;
+  padding: 8px 22px; border: 4px solid; border-radius: 10px;
+  font-size: 22px; font-weight: 900; letter-spacing: 2px;
+  transition: opacity .1s;
+}
+.sw-overlay.present { right: 24px; color: var(--green);  border-color: var(--green);  transform: rotate(10deg); background: rgba(255,255,255,.9); }
+.sw-overlay.pass    { left:  24px; color: #D32F2F; border-color: #D32F2F; transform: rotate(-10deg); background: rgba(255,255,255,.9); }
+
+.sw-body { padding: 14px 16px 16px; }
+.sw-addr { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -.2px; }
+.sw-sub  { font-size: 11px; color: var(--text-light); margin-top: 3px; font-weight: 500; }
+.sw-bbl {
+  display:flex; gap: 10px; margin-top: 12px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+.sw-bbl-item { flex:1; display:flex; flex-direction:column; align-items:center; }
+.sw-bbl-val { font-size: 16px; font-weight: 700; color: var(--green); font-family: 'Cormorant Garamond', serif; }
+.sw-bbl-lbl { font-size: 9px; text-transform:uppercase; letter-spacing:.5px; color: var(--text-light); font-weight:600; margin-top:2px; }
+.sw-meta { margin-top: 10px; }
+.sw-meta-row { display:flex; justify-content:space-between; padding:4px 0; font-size: 11px; }
+.sw-meta-row .k { color: var(--text-light); text-transform:uppercase; font-size:10px; letter-spacing:.5px; font-weight:600; }
+.sw-meta-row .v { color: var(--text); font-weight: 600; text-align: right; }
+.sw-link {
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  margin-top: 12px; padding: 9px; background: var(--green); color: var(--white);
+  border-radius: var(--r-pill); font-size: 11px; font-weight: 700;
+  letter-spacing: .3px; text-decoration: none;
+}
+.sw-link:hover { background: var(--green-light, #2D5A40); }
+.sw-comment {
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--gold-pale, #FBF7EE);
+  border: 1px solid var(--border-light); border-radius: var(--r-md);
+}
+.sw-comment-lbl {
+  display:flex; align-items:center; gap:6px;
+  font-size: 10px; text-transform: uppercase; letter-spacing:.5px;
+  color: var(--gold-hover, #B8941D); font-weight: 700; margin-bottom: 6px;
+}
+.sw-comment textarea {
+  width: 100%; min-height: 44px; resize: vertical; border: none; background: transparent;
+  font-family: inherit; font-size: 12px; color: var(--text); line-height: 1.45;
+  outline: none; padding: 2px 0;
+}
+.sw-comment textarea::placeholder { color: var(--text-light); font-style: italic; }
+.sw-empty {
+  padding: 40px 20px; text-align: center; color: var(--text-mid);
+  font-size: 14px; background: var(--surface-warm);
+  border: 1px dashed var(--border); border-radius: var(--r-md);
+}
   </style>
 </head>
 <body>
@@ -5450,8 +5612,8 @@ function openClientProfile(clientName) {
       </div>
 
       <!-- Match Summary -->
-      <div class="cl-section" style="border-left:4px solid #0EA5E9">
-        <h4>Match Summary — ${allMatches.length} properties</h4>
+      <div class="cl-section" id="mmMatchSummary" style="border-left:4px solid #0EA5E9">
+        <h4 data-role="ms-title">Match Summary — ${allMatches.length} properties</h4>
         <div class="pir-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
           <div class="pir-metric"><div class="pir-metric-label">For Sale</div><div class="pir-metric-val" style="color:#1565C0">${forSaleMatches.length}</div></div>
           <div class="pir-metric"><div class="pir-metric-label">Off Market</div><div class="pir-metric-val" style="color:#E65100">${offMarketMatches.length}</div></div>
@@ -5598,6 +5760,25 @@ function openClientProfile(clientName) {
   // Escape key handler
   var _clEsc = function(ev){ if(ev.key==='Escape'){ closeClientProfile(); document.removeEventListener('keydown',_clEsc); }};
   document.addEventListener('keydown', _clEsc);
+
+  // ── Swap Match Summary into the swipe deck for eligible clients ──
+  try {
+    if (typeof _swipeEligible === 'function' && _swipeEligible(client)) {
+      const ms = overlay.querySelector('#mmMatchSummary');
+      if (ms) {
+        const title = ms.querySelector('[data-role="ms-title"]');
+        const queue7d = (typeof _swGetQueue === 'function') ? _swGetQueue(clientName, locs, merged) : [];
+        if (title) title.textContent = 'Match Summary — ' + queue7d.length + ' new (last 7 days)';
+        // Clear the old match list markup and mount the swipe deck
+        const deckMount = document.createElement('div');
+        deckMount.id = 'mmSwipeDeckMount';
+        // Remove every child of ms except the h4 title
+        Array.from(ms.children).forEach(ch => { if (ch.tagName !== 'H4') ch.remove(); });
+        ms.appendChild(deckMount);
+        _swRenderDeck(clientName, merged, locs, deckMount);
+      }
+    }
+  } catch(e) { console.warn('[swipe] deck mount failed', e); }
 }
 
 function closeClientProfile() {
@@ -6008,6 +6189,389 @@ function _getForSaleMatches(locs, client) {
 
 function _getOffMarketMatches(locs, client) {
   return (D.sampleOff || []).filter(l => _matchesClientBrief(l, client, locs));
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Swipe Deck — per-client Match Summary renderer
+   Called from openClientProfile() for first-page Active Buyers
+   (excluding Jack + Jimmy). Shows last-7-day matches only, with hero photo,
+   floor plan toggle, per-card comment, left=Pass / right=Present swipes.
+   ═════════════════════════════════════════════════════════════════════════ */
+const _SW_SKIP_NAMES = new Set(['jack','jimmy']);
+function _swipeEligible(client) {
+  if (!client) return false;
+  const name = (client.name||'').trim().toLowerCase();
+  if (_SW_SKIP_NAMES.has(name)) return false;
+  const sec = (client.section||'').toLowerCase();
+  if (!sec.includes('buyer')) return false;
+  // Only Active Buyers (first-page tab)
+  const st = (client.status||'Active').toLowerCase();
+  return st === 'active' || st === '';
+}
+
+function _swKey(addr, sub) {
+  return ((addr||'')+'|'+(sub||'')).toLowerCase().replace(/[^a-z0-9|]/g,'');
+}
+function _swReaLink(addr, sub) {
+  const q = (addr||'') + ', ' + (sub||'') + ', nsw';
+  return 'https://www.realestate.com.au/buy/in-' + encodeURIComponent(q) + '/list-1';
+}
+function _swEsc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function _swFormatLastSold(listing) {
+  try {
+    // 1) D._propertyData (property.com.au enriched)
+    const nk = (a,s) => ((a||'').replace(/,\s*\w.*$/,'') + ' ' + (s||'')).toLowerCase()
+      .replace(/street/g,'st').replace(/road/g,'rd').replace(/avenue/g,'ave')
+      .replace(/drive/g,'dr').replace(/place/g,'pl').replace(/lane/g,'ln')
+      .replace(/crescent/g,'cres').replace(/circuit/g,'cct').replace(/parade/g,'pde')
+      .replace(/court/g,'ct').replace(/close/g,'cl').replace(/terrace/g,'tce')
+      .replace(/boulevard/g,'blvd').replace(/way/g,'wy')
+      .replace(/[^a-z0-9]/g,'');
+    const k = nk(listing.address, listing.suburb);
+    const pd = (D._propertyData||{})[k];
+    if (pd && pd.lastSoldPrice && pd.lastSoldDate) {
+      return { price: pd.lastSoldPrice, date: pd.lastSoldDate };
+    }
+    // 2) D._soldHistory (VG govt data)
+    const sh = (D._soldHistory||{})[k];
+    if (sh && sh.sales && sh.sales.length) {
+      const latest = sh.sales[sh.sales.length-1];
+      return { price: latest.price, date: latest.date };
+    }
+  } catch(e){}
+  return null;
+}
+
+async function _swFetchImages(listing) {
+  const cacheKey = 'mmPropImgCache';
+  let cache = {};
+  try { cache = JSON.parse(localStorage.getItem(cacheKey)||'{}'); } catch(e){}
+  const k = _swKey(listing.address, listing.suburb);
+  if (cache[k] && (Date.now() - (cache[k].ts||0) < 7*24*60*60*1000)) return cache[k];
+  if (!listing.url) return null;
+  try {
+    const proxy = 'https://corsproxy.io/?url=' + encodeURIComponent(listing.url);
+    const res = await fetch(proxy);
+    const html = await res.text();
+    const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return null;
+    const data = JSON.parse(m[1]);
+    let hero = null, floor = null;
+    const pickBucketUrl = (url) => {
+      if (!url) return null;
+      const m2 = url.match(/\/(\d+_\d+_\d+_\d+_\d+-w\d+-h\d+)$/);
+      return m2 ? 'https://bucket-api.domain.com.au/v1/bucket/image/' + m2[1] : url;
+    };
+    function walk(o){
+      if (!o || typeof o !== 'object') return;
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (o.type === 'photo' && !hero) {
+        const u = o.url || o.imageUrl;
+        if (u && /_1_1_/.test(u)) hero = pickBucketUrl(u);
+      }
+      if (o.type === 'floorplan' && !floor) {
+        const u = o.url || o.imageUrl;
+        if (u) floor = pickBucketUrl(u);
+      }
+      for (const kk of Object.keys(o)) if (typeof o[kk] === 'object') walk(o[kk]);
+    }
+    walk(data);
+    if (!hero) {
+      // fallback: grab first photo-type media regardless of naming
+      function fallback(o){
+        if (hero || !o || typeof o !== 'object') return;
+        if (Array.isArray(o)) { o.forEach(fallback); return; }
+        if (o.type === 'photo') {
+          const u = o.url || o.imageUrl;
+          if (u) hero = pickBucketUrl(u);
+        }
+        for (const kk of Object.keys(o)) if (typeof o[kk] === 'object') fallback(o[kk]);
+      }
+      fallback(data);
+    }
+    const result = { hero, floor, ts: Date.now() };
+    cache[k] = result;
+    try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch(e){}
+    return result;
+  } catch(e) { console.warn('[swipe] image fetch failed', listing.address, e); return null; }
+}
+
+function _swFilter7d(listings) {
+  const sevenAgo = Date.now() - 7*24*60*60*1000;
+  return listings.filter(l => {
+    const d = _parseFlexDate(l.listDate || l.date || '');
+    return d && d >= sevenAgo;
+  });
+}
+
+function _swDedupe(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const l of arr) {
+    const k = _swKey(l.address, l.suburb);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(l);
+  }
+  return out;
+}
+
+function _swGetQueue(clientName, locs, client) {
+  const fs = _getForSaleMatches(locs, client).map(l => ({...l, _src:'online'}));
+  const om = _getOffMarketMatches(locs, client).map(l => ({...l, _src:'offmkt'}));
+  let combined = _swDedupe([...fs, ...om]);
+  combined = _swFilter7d(combined);
+  combined.sort((a,b) => {
+    const da = _parseFlexDate(a.listDate||a.date||'') || 0;
+    const db = _parseFlexDate(b.listDate||b.date||'') || 0;
+    return db - da;
+  });
+  // Exclude already-presented and already-dismissed
+  const presented = (lsGet('mmPresented', {})[clientName] || []);
+  const dismissed = (lsGet('mmDismissedProps', {})[clientName] || []);
+  const skipSet = new Set();
+  presented.forEach(p => skipSet.add(_swKey(p.address, p.suburb)));
+  dismissed.forEach(d => {
+    if (typeof d === 'string') skipSet.add(d.toLowerCase().replace(/[^a-z0-9|]/g,''));
+    else skipSet.add(_swKey(d.address, d.suburb));
+  });
+  return combined.filter(l => !skipSet.has(_swKey(l.address, l.suburb)));
+}
+
+function _swCardHTML(l) {
+  const srcLabel = l._src === 'offmkt' ? 'OFF MARKET' : 'FOR SALE';
+  const srcClass = l._src === 'offmkt' ? 'offmkt' : (parseInt(l.daysOnMarket||l.dom||0) <= 7 ? 'new' : '');
+  const beds = l.beds || l.bed || '—';
+  const baths = l.baths || l.bath || '—';
+  const car = l.parking || l.car || '—';
+  const land = l.landSize || l.land || '';
+  const price = l.guidePrice || l.price || '—';
+  const type = l.propertyType || l.type || '';
+  const agent = l.agent || l.agentNames || '—';
+  const agency = l.agency || l.agencyName || '';
+  const listedDate = l.listDate || l.date || '';
+  const lastSold = _swFormatLastSold(l);
+  const reaUrl = _swReaLink(l.address, l.suburb);
+  const lastSoldHtml = lastSold
+    ? `<div class="sw-meta-row"><span class="k">Last Sold</span><span class="v" style="color:var(--orange)">${_swEsc(lastSold.price)} · ${_swEsc(lastSold.date)}</span></div>`
+    : `<div class="sw-meta-row"><span class="k">Last Sold</span><span class="v" style="color:var(--text-light)">No record</span></div>`;
+  return `
+    <div class="sw-photo loading" data-hero="" data-floor="">
+      <div class="sw-src-badge ${srcClass}">${srcLabel}</div>
+      <div class="sw-toggle">
+        <button class="active" data-view="photo">Photo</button>
+        <button data-view="floor" disabled style="opacity:.4">Floor</button>
+      </div>
+      <div class="sw-price">${_swEsc(price)}</div>
+      <div class="sw-dots"><span class="active"></span><span></span></div>
+      <div class="sw-overlay present">Present</div>
+      <div class="sw-overlay pass">Pass</div>
+    </div>
+    <div class="sw-body">
+      <div class="sw-addr">${_swEsc(l.address||'')}</div>
+      <div class="sw-sub">${_swEsc(l.suburb||'')}${type ? ' · ' + _swEsc(type) : ''}${listedDate ? ' · Listed ' + _swEsc(listedDate) : ''}</div>
+      <div class="sw-bbl">
+        <div class="sw-bbl-item"><div class="sw-bbl-val">${_swEsc(beds)}</div><div class="sw-bbl-lbl">Bed</div></div>
+        <div class="sw-bbl-item"><div class="sw-bbl-val">${_swEsc(baths)}</div><div class="sw-bbl-lbl">Bath</div></div>
+        <div class="sw-bbl-item"><div class="sw-bbl-val">${_swEsc(car)}</div><div class="sw-bbl-lbl">Car</div></div>
+        ${land ? `<div class="sw-bbl-item"><div class="sw-bbl-val" style="font-size:13px;margin-top:3px">${_swEsc(land)}</div><div class="sw-bbl-lbl">Land</div></div>` : ''}
+      </div>
+      <div class="sw-meta">
+        <div class="sw-meta-row"><span class="k">Agent</span><span class="v">${_swEsc(agent)}${agency ? ' · ' + _swEsc(agency) : ''}</span></div>
+        ${lastSoldHtml}
+      </div>
+      <a class="sw-link" href="${_swEsc(reaUrl)}" target="_blank" rel="noopener">View on realestate.com.au ↗</a>
+      <div class="sw-comment">
+        <div class="sw-comment-lbl">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+          Your note about this property
+        </div>
+        <textarea class="sw-comment-input" placeholder="Add any thoughts before you swipe — this will save with the card…" rows="2"></textarea>
+      </div>
+    </div>
+  `;
+}
+
+function _swRenderDeck(clientName, client, locs, rootEl) {
+  const queueKey = 'mmSwipeQueue_' + clientName;
+  // Build queue fresh each open (so new listings appear, presented/dismissed filtered out)
+  let queue = _swGetQueue(clientName, locs, client);
+
+  rootEl.innerHTML = `
+    <div class="sw-deck-wrap">
+      <div class="sw-deck-head">
+        <div class="sw-count">To review</div>
+        <div><span class="sw-remain" data-role="remain">${queue.length}</span> <span style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;font-weight:600">left</span></div>
+      </div>
+      <div class="sw-legend">
+        <div class="l">← Pass (save note)</div>
+        <div class="arrow">swipe or tap</div>
+        <div class="r">Present →</div>
+      </div>
+      <div class="sw-controls">
+        <button class="sw-btn pass" data-role="pass">← Pass</button>
+        <button class="sw-btn present" data-role="present">Present →</button>
+      </div>
+      <div class="sw-stack" data-role="stack"></div>
+    </div>`;
+
+  const stack = rootEl.querySelector('[data-role="stack"]');
+  const remainEl = rootEl.querySelector('[data-role="remain"]');
+  const passBtn = rootEl.querySelector('[data-role="pass"]');
+  const presentBtn = rootEl.querySelector('[data-role="present"]');
+
+  let activeCard = null, startX = 0, currentX = 0, dragging = false;
+
+  function renderStack() {
+    stack.innerHTML = '';
+    remainEl.textContent = queue.length;
+    if (queue.length === 0) {
+      stack.innerHTML = '<div class="sw-empty">🎉 All last-7-day matches reviewed for ' + _swEsc(clientName) + '. New matches will appear here as they come in.</div>';
+      passBtn.disabled = true; presentBtn.disabled = true;
+      return;
+    }
+    passBtn.disabled = false; presentBtn.disabled = false;
+    const show = queue.slice(0, 5);
+    show.forEach((l, i) => {
+      const card = document.createElement('div');
+      card.className = 'sw-card';
+      card.dataset.depth = String(i);
+      card.dataset.addr = l.address || '';
+      card.dataset.sub = l.suburb || '';
+      card.innerHTML = _swCardHTML(l);
+      stack.appendChild(card);
+      wireCard(card, l);
+    });
+    attachGestures();
+  }
+
+  function wireCard(card, l) {
+    // Trigger async image fetch
+    const photoEl = card.querySelector('.sw-photo');
+    _swFetchImages(l).then(imgs => {
+      if (!imgs) { photoEl.classList.remove('loading'); photoEl.style.background='#e8e4db'; return; }
+      if (imgs.hero) {
+        photoEl.dataset.hero = imgs.hero;
+        photoEl.style.backgroundImage = 'url("' + imgs.hero + '")';
+        photoEl.classList.remove('loading');
+      } else { photoEl.classList.remove('loading'); }
+      const floorBtn = card.querySelector('.sw-toggle button[data-view="floor"]');
+      if (imgs.floor && floorBtn) {
+        photoEl.dataset.floor = imgs.floor;
+        floorBtn.disabled = false; floorBtn.style.opacity = '1';
+      }
+    });
+    // Photo toggle
+    const toggleBtns = card.querySelectorAll('.sw-toggle button');
+    const dots = card.querySelectorAll('.sw-dots span');
+    toggleBtns.forEach((btn, i) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (btn.disabled) return;
+        const view = btn.dataset.view;
+        const src = view === 'floor' ? photoEl.dataset.floor : photoEl.dataset.hero;
+        if (!src) return;
+        photoEl.style.backgroundImage = 'url("' + src + '")';
+        photoEl.classList.toggle('floor', view === 'floor');
+        toggleBtns.forEach(b => b.classList.toggle('active', b === btn));
+        dots.forEach((d, j) => d.classList.toggle('active', j === i));
+      });
+    });
+    // Don't let comment/link start a drag
+    const stop = (e) => e.stopPropagation();
+    const comment = card.querySelector('.sw-comment-input');
+    ['mousedown','touchstart','pointerdown','click'].forEach(ev => comment.addEventListener(ev, stop));
+    const link = card.querySelector('.sw-link');
+    ['mousedown','touchstart','pointerdown'].forEach(ev => link.addEventListener(ev, stop));
+  }
+
+  function attachGestures() {
+    const top = stack.querySelector('.sw-card[data-depth="0"]');
+    if (!top) return;
+    const onStart = (x) => { activeCard = top; startX = x; currentX = 0; dragging = true; top.classList.add('dragging'); };
+    const onMove = (x) => {
+      if (!dragging || !activeCard) return;
+      currentX = x - startX;
+      activeCard.style.transform = 'translateX(' + currentX + 'px) rotate(' + (currentX/25) + 'deg)';
+      const p = activeCard.querySelector('.sw-overlay.present');
+      const f = activeCard.querySelector('.sw-overlay.pass');
+      if (currentX > 20) { p.style.opacity = Math.min(1, currentX/120); f.style.opacity = 0; }
+      else if (currentX < -20) { f.style.opacity = Math.min(1, -currentX/120); p.style.opacity = 0; }
+      else { p.style.opacity = 0; f.style.opacity = 0; }
+    };
+    const onEnd = () => {
+      if (!dragging || !activeCard) return;
+      dragging = false; activeCard.classList.remove('dragging');
+      if (currentX > 120) swipeOut('right');
+      else if (currentX < -120) swipeOut('left');
+      else {
+        activeCard.style.transform = '';
+        activeCard.querySelector('.sw-overlay.present').style.opacity = 0;
+        activeCard.querySelector('.sw-overlay.pass').style.opacity = 0;
+      }
+    };
+    top.ontouchstart = e => onStart(e.touches[0].clientX);
+    top.ontouchmove  = e => onMove(e.touches[0].clientX);
+    top.ontouchend   = onEnd;
+    top.onmousedown  = e => { onStart(e.clientX); e.preventDefault(); };
+    // Window-level mousemove/up — but be scoped: use capture handlers that only act when dragging is true.
+    window.addEventListener('mousemove', (e) => { if (dragging) onMove(e.clientX); });
+    window.addEventListener('mouseup', onEnd);
+  }
+
+  function swipeOut(dir) {
+    if (!activeCard) return;
+    const commentEl = activeCard.querySelector('.sw-comment-input');
+    const note = commentEl ? commentEl.value.trim() : '';
+    const addr = activeCard.dataset.addr;
+    const sub = activeCard.dataset.sub;
+    activeCard.classList.add('gone');
+    const x = dir === 'right' ? window.innerWidth : -window.innerWidth;
+    activeCard.style.transform = 'translateX(' + x + 'px) rotate(' + (dir==='right'?20:-20) + 'deg)';
+    activeCard.style.opacity = '0';
+
+    const l = queue.shift();
+    if (!l) return;
+    if (dir === 'right') {
+      // Save to mmPresented with note
+      const pres = lsGet('mmPresented', {});
+      pres[clientName] = pres[clientName] || [];
+      pres[clientName].push({
+        address: l.address, suburb: l.suburb, type: l.propertyType||l.type||'',
+        price: l.guidePrice||l.price||'', beds: l.beds||l.bed||'', baths: l.baths||l.bath||'',
+        car: l.parking||l.car||'', landSize: l.landSize||l.land||'',
+        source: l._src === 'offmkt' ? 'Off Market' : 'Online',
+        feedback: note,
+        presentedDate: new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}),
+        presentedTs: Date.now()
+      });
+      lsSet('mmPresented', pres);
+    } else {
+      // Save to dismissed with note
+      const dis = lsGet('mmDismissedProps', {});
+      dis[clientName] = dis[clientName] || [];
+      dis[clientName].push({
+        address: l.address, suburb: l.suburb,
+        note: note,
+        dismissedTs: Date.now(),
+        dismissedDate: new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'})
+      });
+      lsSet('mmDismissedProps', dis);
+    }
+    setTimeout(() => { activeCard = null; renderStack(); }, 300);
+  }
+
+  passBtn.onclick = () => {
+    const top = stack.querySelector('.sw-card[data-depth="0"]');
+    if (!top) return; activeCard = top; swipeOut('left');
+  };
+  presentBtn.onclick = () => {
+    const top = stack.querySelector('.sw-card[data-depth="0"]');
+    if (!top) return; activeCard = top; swipeOut('right');
+  };
+
+  renderStack();
 }
 
 // ── Auto-Match New Listings to Client Briefs ──────────────────────────────
