@@ -12444,6 +12444,62 @@ function renderPropingSnapshot() {
   }).join('');
 
   el.innerHTML = `
+    <div class="proping-snap-title">📬 Proping Weekly Snapshot <span style="font-size:12px;color:var(--text-light);font-family:var(--ff-ui)">${rangeLabel}</span></div>
+    ${rows}
+    <div style="text-align:right;margin-top:8px">
+      <button class="link" style="font-size:11px;cursor:pointer;background:none;border:none;color:var(--gold)"
+        onclick="showPage('proping')">View full Proping report →</button>
+    </div>`;
+  el.style.display = 'block';
+}
+
+
+// ── Dashboard Snapshot Widget ─────────────────────────────────────────────────
+function renderPropingSnapshot() {
+  const el = document.getElementById('proping-snapshot-widget');
+  if (!el) return;
+  if (typeof propingHistory === 'undefined' || !propingHistory.length) {
+    el.style.display = 'none';
+    return;
+  }
+
+  // Aggregate by suburb (last 7 days, dedup)
+  const seen = new Set();
+  const subMap = {};
+  for (const day of propingHistory) {
+    for (const section of ['price_changes','newly_listed','sold']) {
+      for (const p of (day[section] || [])) {
+        const addr = (p.address||'').toLowerCase();
+        if (!addr || seen.has(addr)) continue;
+        seen.add(addr);
+        const suburb = (p.suburb || 'Unknown').trim() || 'Unknown';
+        if (!subMap[suburb]) subMap[suburb] = {c:0, n:0, s:0};
+        if (section === 'price_changes') subMap[suburb].c++;
+        if (section === 'newly_listed')  subMap[suburb].n++;
+        if (section === 'sold')          subMap[suburb].s++;
+      }
+    }
+  }
+
+  const suburbs = Object.keys(subMap).sort();
+  if (!suburbs.length) { el.style.display = 'none'; return; }
+
+  const dates = propingHistory.map(e => e.date).filter(Boolean);
+  const rangeLabel = dates.length > 1 ? `${dates[dates.length-1]} – ${dates[0]}` : (dates[0]||'');
+
+  let rows = suburbs.map(s => {
+    const d = subMap[s];
+    return `<div class="snap-row">
+      <span class="snap-suburb">${s}</span>
+      <span class="snap-pills">
+        ${d.c ? `<span class="p-cnt p-cnt-change">↓ ${d.c}</span>` : ''}
+        ${d.n ? `<span class="p-cnt p-cnt-new">+ ${d.n}</span>` : ''}
+        ${d.s ? `<span class="p-cnt p-cnt-sold">✓ ${d.s}</span>` : ''}
+      </span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
     <div class="proping-snap-title">Proping Weekly Snapshot <span style="font-size:12px;color:var(--text-light);font-family:var(--ff-ui)">${rangeLabel}</span></div>
     ${rows}
     <div style="text-align:right;margin-top:8px">
