@@ -618,24 +618,43 @@ def main():
     all_sold   = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-            ],
-        )
-        context = browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={'width': 1440, 'height': 900},
-            locale='en-AU',
-            timezone_id='Australia/Sydney',
-        )
-        # Light stealth: remove webdriver flag
-        context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+        if _DRIVER == 'patchright':
+            # Patchright's recommended full-stealth mode: persistent context
+            # + real Chrome + NO custom user_agent / viewport / init scripts
+            # (they all leak automation signals). Significantly more
+            # effective than the drop-in sync_api swap, which Domain's
+            # Akamai still fingerprinted and denied every request.
+            import tempfile
+            user_data_dir = tempfile.mkdtemp(prefix='patchright-')
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                channel='chrome',       # real Chrome (installed on runner),
+                                        # not the Chromium build Playwright ships
+                headless=True,
+                no_viewport=True,
+                locale='en-AU',
+                timezone_id='Australia/Sydney',
+            )
+            browser = None
+        else:
+            browser = pw.chromium.launch(
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                ],
+            )
+            context = browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={'width': 1440, 'height': 900},
+                locale='en-AU',
+                timezone_id='Australia/Sydney',
+            )
+            # Light stealth: remove webdriver flag
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
 
         try:
             for slug, state, postcode in suburbs:
@@ -655,7 +674,8 @@ def main():
         finally:
             try:
                 context.close()
-                browser.close()
+                if browser is not None:
+                    browser.close()
             except Exception:
                 pass
 
