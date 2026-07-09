@@ -93,12 +93,25 @@ LNS_SUBURBS = [
 
 
 class HTMLStripper(HTMLParser):
-    """Strip HTML tags and return plain text."""
+    """Strip HTML tags and return plain text.
+
+    Preserves <img src="..."> tags as inline [img:URL] markers so the
+    Proping parser can pair each property with its photo. Domain scraping
+    is blocked at Akamai — the Proping email is our only reliable photo
+    source.
+    """
     def __init__(self):
         super().__init__()
         self.text = []
     def handle_data(self, data):
         self.text.append(data)
+    def handle_starttag(self, tag, attrs):
+        if tag == 'img':
+            src = dict(attrs).get('src', '')
+            # Ignore tracking pixels, spacers, and 1x1 gifs — real photos
+            # are always jpg/jpeg/png/webp with a real URL.
+            if src and any(ext in src.lower() for ext in ('.jpg', '.jpeg', '.png', '.webp')):
+                self.text.append(f' [img:{src}] ')
     def get_text(self):
         return ' '.join(self.text)
 
@@ -301,8 +314,15 @@ def parse_proping_email(subject, body, date_str):
     # Strip URLs: <http...> and [http...]
     cleaned = re.sub(r'<https?://[^>]+>', '', body)
     cleaned = re.sub(r'\[https?://[^\]]+\]', '', cleaned)
-    # Strip image placeholders
-    cleaned = re.sub(r'\[image:[^\]]*\]', '', cleaned)
+    # Extract image URLs from [img:URL] (our HTMLStripper) and [image: URL]
+    # (Proping's plain-text placeholder). Replace with a compact marker
+    # the parser recognizes, so we can attach each image to the property
+    # that follows it in the email layout.
+    def _mark_img(m):
+        url = m.group(1).strip()
+        return f' __MMIMG__{url}__MMIMG__ '
+    cleaned = re.sub(r'\[img:(https?://[^\]]+)\]', _mark_img, cleaned)
+    cleaned = re.sub(r'\[image:\s*(https?://[^\]]+)\]', _mark_img, cleaned)
 
     lines = cleaned.split('\n')
 
@@ -322,6 +342,7 @@ def parse_proping_email(subject, body, date_str):
 
     current_section = None
     current_entry = None
+    pending_img = None  # last image URL seen before the next address line
     i = 0
 
     while i < len(lines):
@@ -330,6 +351,19 @@ def parse_proping_email(subject, body, date_str):
 
         if not line:
             continue
+
+        # Capture image markers (from HTML img tags or Proping's plain-text
+        # placeholders). Remember the URL so the next address line inherits
+        # it as its heroPhoto. Multiple images before one address = we
+        # keep only the LAST one, which in Proping's layout is the hero.
+        img_matches = re.findall(r'__MMIMG__(https?://\S+?)__MMIMG__', line)
+        if img_matches:
+            pending_img = img_matches[-1]
+            # Strip the markers so the rest of the line can still parse
+            # normally (Proping sometimes inlines an image + text together).
+            line = re.sub(r'__MMIMG__\S+?__MMIMG__', '', line).strip()
+            if not line:
+                continue
 
         # Check for section headers like "Newly Listed(8)" or "Sold(5)"
         l_lower = line.lower()
@@ -343,6 +377,7 @@ def parse_proping_email(subject, body, date_str):
                     data[current_entry['_section']].append(
                         {k: v for k, v in current_entry.items() if k != '_section'})
                 current_entry = None
+                pending_img = None  # reset between sections
                 break
         if matched_section:
             continue
@@ -350,7 +385,7 @@ def parse_proping_email(subject, body, date_str):
         if not current_section:
             continue
 
-        # Skip image URLs and empty decorative lines
+        # Skip stray URLs and decorative lines
         if line.startswith('[') or line.startswith('http') or line == '________________________________':
             continue
 
@@ -393,8 +428,10 @@ def parse_proping_email(subject, body, date_str):
                 'agency': '',
                 'source': 'proping_email',
                 'date': date_str,
+                'heroPhoto': pending_img or '',
                 '_section': current_section,
             }
+            pending_img = None  # consumed by this entry
             continue
 
         if not current_entry:
@@ -698,7 +735,8 @@ def scan_gmail(days=DEFAULT_SCAN_DAYS, proping_only=False, offmarket_only=False)
                 print(f"  📊 Proping: {subject[:60]} ({date_str})")
                 parsed = parse_proping_email(subject, body, date_str)
                 total = sum(len(parsed[k]) for k in ['newly_listed', 'price_changes', 'sold', 'auction_changes', 'unlisted', 'over_90_days'])
-                print(f"     → {total} properties extracted")
+                photos = sum(1 for k in parsed if isinstance(parsed[k], list) for p in parsed[k] if isinstance(p, dict) and p.get('heroPhoto'))
+                print(f"     → {total} properties extracted ({photos} with photo)")
                 proping_entries.append(parsed)
                 seen.add(msg_id_str)
                 continue
