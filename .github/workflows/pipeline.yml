@@ -67,6 +67,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r pipeline/requirements.txt
           python -m playwright install --with-deps chromium
+          # Patchright ships its own patched chromium build for stealth.
+          # `|| true` because failure is non-fatal — the Domain scraper
+          # falls back to vanilla playwright if patchright isn't usable.
+          python -m patchright install chromium || true
 
       # Interim state continuity (scraper caches / first-seen). Becomes
       # unnecessary once the data lives in Supabase. Rolling cache: unique save

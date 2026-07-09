@@ -32,16 +32,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# ── Playwright (auto-install if missing) ─────────────────────────────────────
+# ── Playwright / Patchright ──────────────────────────────────────────────────
+# Prefer Patchright (a maintained fork of Playwright with better anti-bot
+# stealth — specifically designed to slip past Akamai/Cloudflare). Falls back
+# to vanilla Playwright if Patchright isn't installed, so this stays runnable
+# in dev environments that don't have it. Both expose the same sync_api.
+_DRIVER = None
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    from patchright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    _DRIVER = 'patchright'
 except ImportError:
-    print("Installing playwright...")
-    subprocess.run([sys.executable, '-m', 'pip', 'install', 'playwright',
-                    '--break-system-packages'], check=True)
-    subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'],
-                   check=True)
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        _DRIVER = 'playwright'
+    except ImportError:
+        print("Installing playwright...")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'playwright',
+                        '--break-system-packages'], check=True)
+        subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                       check=True)
+        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        _DRIVER = 'playwright'
 
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -426,8 +437,28 @@ def _parse_dom_cards(page, sold):
 
 # ── Core scraper ─────────────────────────────────────────────────────────────
 
+# Module-level counters for the Access-Denied diagnostic. When Domain's Akamai
+# edge blocks the scraper it returns a ~330-byte "Access Denied" HTML page
+# instead of a real listing page. Previously the scraper silently continued
+# with an empty result set — we'd end the day with "0 listings" and no
+# indication it was a block versus a legitimate empty market. Now we count
+# denials per run and print a summary so the log makes the block obvious.
+_denied_pages = 0
+_ok_pages = 0
+
+def _is_access_denied(html):
+    if not html:
+        return True
+    if len(html) < 5000 and 'Access Denied' in html:
+        return True
+    if 'errors.edgesuite.net' in html:  # Akamai signature
+        return True
+    return False
+
+
 def scrape_suburb(context, slug, state, postcode, sold, max_pages):
     """Scrape one suburb through N pages on Domain."""
+    global _denied_pages, _ok_pages
     results = []
     display = slug.replace('-', ' ').title()
 
@@ -467,22 +498,30 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages):
 
             html = page.content()
 
-            # Prefer structured JSON
-            listings = _extract_from_next_data(html)
-            if listings:
-                for lm in listings:
-                    rec = _clean_listing(lm, sold=sold)
-                    if rec:
-                        if not rec['suburb']:
-                            rec['suburb'] = display
-                        got.append(rec)
+            # Detect the ~330-byte Akamai "Access Denied" response BEFORE we
+            # bother parsing. When this fires there's no __NEXT_DATA__ to look
+            # at — the parse would just silently produce zero listings.
+            if _is_access_denied(html):
+                _denied_pages += 1
+                print(f'      🚫 ACCESS DENIED ({len(html)} bytes) — Domain is blocking this IP/UA')
+            else:
+                _ok_pages += 1
+                # Prefer structured JSON
+                listings = _extract_from_next_data(html)
+                if listings:
+                    for lm in listings:
+                        rec = _clean_listing(lm, sold=sold)
+                        if rec:
+                            if not rec['suburb']:
+                                rec['suburb'] = display
+                            got.append(rec)
 
-            # DOM fallback
-            if not got:
-                got = _parse_dom_cards(page, sold)
-                for r in got:
-                    if not r.get('suburb'):
-                        r['suburb'] = display
+                # DOM fallback
+                if not got:
+                    got = _parse_dom_cards(page, sold)
+                    for r in got:
+                        if not r.get('suburb'):
+                            r['suburb'] = display
 
         except PWTimeout:
             print(f'      ⚠ timeout')
@@ -569,7 +608,7 @@ def main():
         suburbs = [row for row in LNS_SUBURBS if row[0] in wanted]
 
     print('=' * 60)
-    print('  Domain Scraper (Playwright)')
+    print(f'  Domain Scraper ({_DRIVER})')
     print(f'  {datetime.now().strftime("%A %d %B %Y  %H:%M")}')
     print(f'  {len(suburbs)} suburbs × {args.pages} pages')
     print(f'  listed={do_listed}  sold={do_sold}')
@@ -624,6 +663,10 @@ def main():
     all_sold   = dedupe(all_sold, sold=True)
 
     print('\n' + '=' * 60)
+    total_pages = _denied_pages + _ok_pages
+    if total_pages:
+        print(f'  Pages: {_ok_pages} ok, {_denied_pages} denied '
+              f'({_denied_pages*100//total_pages}% blocked)')
     print(f'  New for-sale: {len(all_listed)}')
     print(f'  New sold    : {len(all_sold)}')
 

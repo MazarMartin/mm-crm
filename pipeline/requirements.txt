@@ -4,6 +4,12 @@
 # Browser-based scrapers (Domain, OnTheHouse, agency websites)
 playwright>=1.40.0
 
+# Patchright: maintained Playwright fork with better anti-bot stealth,
+# specifically designed to defeat Akamai/Cloudflare detection. Used by
+# scrape_domain_realestate.py which is aggressively blocked by Domain's
+# Akamai edge. Falls back to plain playwright if this import fails.
+patchright>=1.40.0
+
 # HTML scraping (agency websites — scrape_agency_websites.py)
 requests>=2.31.0
 beautifulsoup4>=4.12.0
