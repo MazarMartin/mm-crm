@@ -19,12 +19,24 @@ history = json.loads(m.group(1))
 domain_fs = json.load(open(Path(__file__).resolve().parent.parent / 'domain_forsale_lns.json'))
 domain_sold = json.load(open(Path(__file__).resolve().parent.parent / 'domain_sold_lns.json'))
 
+# Diagnostic: how much of the Domain scrape actually has heroPhoto URLs.
+# Zero here means the scrape is coming back empty for photos — the fix
+# then can't fill anything and the swipe deck stays photo-less.
+_fs_photo = sum(1 for d in domain_fs if d.get('heroPhoto'))
+_sold_photo = sum(1 for d in domain_sold if d.get('heroPhoto'))
+print(f'Domain fs items with heroPhoto: {_fs_photo}/{len(domain_fs)} | '
+      f'Domain sold items with heroPhoto: {_sold_photo}/{len(domain_sold)}')
+
 filled_listed = 0
 filled_sold = 0
+filled_photo = 0
 
 for day in history:
     for p in day.get('newly_listed', []):
-        if p.get('baths'): continue
+        # Skip only if EVERY fillable field is already present. Previously
+        # this skipped as soon as `baths` was set, which meant heroPhoto
+        # (added later) never backfilled onto existing items.
+        if p.get('baths') and p.get('heroPhoto'): continue
         pa, ps = p.get('address',''), p.get('suburb','').lower()
         for d in domain_fs:
             if match(pa, d.get('address',''), ps, d.get('suburb','').lower()):
@@ -32,11 +44,14 @@ for day in history:
                 if d.get('parking'): p['parking'] = d['parking']
                 if d.get('propertyType'): p['propertyType'] = d['propertyType']
                 if d.get('landSize'): p['landSize'] = d['landSize']
+                if d.get('heroPhoto') and not p.get('heroPhoto'):
+                    p['heroPhoto'] = d['heroPhoto']
+                    filled_photo += 1
                 filled_listed += 1
                 break
 
     for p in day.get('sold', []):
-        if p.get('baths'): continue
+        if p.get('baths') and p.get('heroPhoto'): continue
         pa, ps = p.get('address',''), p.get('suburb','').lower()
         for d in domain_sold:
             if match(pa, d.get('address',''), ps, d.get('suburb','').lower()):
@@ -45,8 +60,11 @@ for day in history:
                 if d.get('propertyType'): p['propertyType'] = d['propertyType']
                 if d.get('landSize'): p['landSize'] = d['landSize']
                 if d.get('method'): p['method'] = d['method']
+                if d.get('heroPhoto') and not p.get('heroPhoto'):
+                    p['heroPhoto'] = d['heroPhoto']
+                    filled_photo += 1
                 filled_sold += 1
                 break
 
 APP_PATH.write_text(html[:m.start(1)] + json.dumps(history) + html[m.end(1):], encoding="utf-8")
-print(f'Newly listed filled: {filled_listed} | Sold filled: {filled_sold}')
+print(f'Newly listed filled: {filled_listed} | Sold filled: {filled_sold} | Photos filled: {filled_photo}')
