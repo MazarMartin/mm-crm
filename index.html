@@ -37674,6 +37674,7 @@ function _syncPropingToTabs() {
           days_listed: nl.days_listed || '',
           listDate: day.date,
           url: nl.url || nl.domain_url || '',
+          heroPhoto: nl.heroPhoto || '',
           zoning: nl.zoning || '',
           fsr: nl.fsr || '',
           heightLimit: nl.heightLimit || '',
@@ -37692,6 +37693,7 @@ function _syncPropingToTabs() {
           // Fill missing fields from Proping (including enriched baths/car/type/url)
           if (nl.price && !existing.guidePrice) { existing.guidePrice = nl.price; existing.price = nl.price; }
           if (nl.agency && !existing.agencyName) existing.agencyName = nl.agency;
+          if (nl.heroPhoto && !existing.heroPhoto) existing.heroPhoto = nl.heroPhoto;
           if (nl.agent && !existing.agentNames) existing.agentNames = nl.agent;
           if (nl.beds && !existing.beds) existing.beds = nl.beds;
           if (nl.baths && !existing.baths) existing.baths = nl.baths;
