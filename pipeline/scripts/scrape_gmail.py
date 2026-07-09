@@ -100,6 +100,11 @@ class HTMLStripper(HTMLParser):
     is blocked at Akamai — the Proping email is our only reliable photo
     source.
     """
+    # Signatures that identify tracking pixels, analytics beacons, and
+    # layout spacers. Real property photos never contain any of these.
+    _TRACKING_SIGS = ('pixel', 'beacon', 'track', 'analytics',
+                      'open?', '/open/', 'spacer', 'blank.gif')
+
     def __init__(self):
         super().__init__()
         self.text = []
@@ -107,11 +112,19 @@ class HTMLStripper(HTMLParser):
         self.text.append(data)
     def handle_starttag(self, tag, attrs):
         if tag == 'img':
-            src = dict(attrs).get('src', '')
-            # Ignore tracking pixels, spacers, and 1x1 gifs — real photos
-            # are always jpg/jpeg/png/webp with a real URL.
-            if src and any(ext in src.lower() for ext in ('.jpg', '.jpeg', '.png', '.webp')):
-                self.text.append(f' [img:{src}] ')
+            a = dict(attrs)
+            # Some emails put the real URL on data-src for lazy loading and
+            # leave src as a placeholder; check both.
+            src = a.get('src') or a.get('data-src') or ''
+            if not src.startswith(('http://', 'https://')):
+                return
+            low = src.lower()
+            if any(sig in low for sig in self._TRACKING_SIGS):
+                return
+            # Reject obvious 1x1 spacers referenced by dimension query args.
+            if 'w=1' in low or 'width=1' in low or 'h=1' in low or 'height=1' in low:
+                return
+            self.text.append(f' [img:{src}] ')
     def get_text(self):
         return ' '.join(self.text)
 
@@ -176,21 +189,30 @@ def decode_mime_header(raw):
 
 
 def get_email_body(msg):
-    """Extract plain text body from email message."""
+    """Extract body text from email message.
+
+    Prefers the HTML part (run through HTMLStripper) because that path
+    preserves inline <img src="..."> URLs as [img:URL] markers so the
+    Proping parser can attach property photos. Falls back to text/plain
+    only if no HTML part exists.
+    """
     body = ''
     if msg.is_multipart():
+        html_body = ''
+        text_body = ''
         for part in msg.walk():
             ct = part.get_content_type()
             if ct == 'text/plain':
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset() or 'utf-8'
-                    body += payload.decode(charset, errors='ignore')
-            elif ct == 'text/html' and not body:
+                    text_body += payload.decode(charset, errors='ignore')
+            elif ct == 'text/html' and not html_body:
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset() or 'utf-8'
-                    body = strip_html(payload.decode(charset, errors='ignore'))
+                    html_body = strip_html(payload.decode(charset, errors='ignore'))
+        body = html_body or text_body
     else:
         ct = msg.get_content_type()
         payload = msg.get_payload(decode=True)
@@ -735,8 +757,19 @@ def scan_gmail(days=DEFAULT_SCAN_DAYS, proping_only=False, offmarket_only=False)
                 print(f"  📊 Proping: {subject[:60]} ({date_str})")
                 parsed = parse_proping_email(subject, body, date_str)
                 total = sum(len(parsed[k]) for k in ['newly_listed', 'price_changes', 'sold', 'auction_changes', 'unlisted', 'over_90_days'])
-                photos = sum(1 for k in parsed if isinstance(parsed[k], list) for p in parsed[k] if isinstance(p, dict) and p.get('heroPhoto'))
+                sample_photo = ''
+                photos = 0
+                for k in parsed:
+                    if not isinstance(parsed[k], list):
+                        continue
+                    for p in parsed[k]:
+                        if isinstance(p, dict) and p.get('heroPhoto'):
+                            photos += 1
+                            if not sample_photo:
+                                sample_photo = p['heroPhoto']
                 print(f"     → {total} properties extracted ({photos} with photo)")
+                if sample_photo:
+                    print(f"        sample photo URL: {sample_photo[:120]}")
                 proping_entries.append(parsed)
                 seen.add(msg_id_str)
                 continue
