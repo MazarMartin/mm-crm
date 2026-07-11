@@ -32915,8 +32915,13 @@ function buildClientOwnProfileView(el, edits) {
             // fix, or dynamically look up from current listings so items
             // stored before this change also render with photos.
             const photo = p.heroPhoto || _mmLookupHeroPhoto(p.address || '');
+            // Single quotes around the URL — the enclosing style attribute
+            // uses double quotes, so wrapping with JSON.stringify (which
+            // produces double quotes) breaks the parse and the browser
+            // sees the URL as a stray attribute. Percent-encode any stray
+            // single quotes in the URL for safety.
             const photoHtml = photo
-              ? `<div style="height:180px;background:#e8e4db url(${JSON.stringify(photo)}) center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
+              ? `<div style="height:180px;background:#e8e4db url('${String(photo).replace(/'/g, '%27')}') center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
               : '';
             return `
             <div style="background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px;overflow:hidden">
