@@ -33177,6 +33177,7 @@ function buildActiveBuyersSection(edits) {
       <td style="text-align:center;font-weight:700;color:#E65100${_bOM7 ? ';cursor:pointer;text-decoration:underline' : ''}" ${_bOM7 ? `onclick="toggleMatchRow('${eName}','offmkt')"` : ''}>${_bOM7 || '—'}</td>
       <td><span class="match-count" onclick="toggleMatchRow('${eName}','all')" style="cursor:pointer">${matches.length}</span></td>
       <td><button class="btn-sm btn-outline" onclick="editClient(this,'${name}')">Edit</button>
+        <button class="btn-sm btn-outline" style="margin-left:4px" title="See what this client sees when they log in" onclick="enterClientPreview('${eName}')">👁</button>
         <button class="btn-sm" style="background:#006039;color:#fff;margin-left:4px" onclick="moveToSettlements('${eName}')">→ Settled</button>
       </td>
     </tr>
@@ -33228,7 +33229,10 @@ function buildSellersSection(edits) {
       <td>${e.referrer||c.referrer||'—'}</td>
       <td>${c.date||'—'}</td>
       <td>${statusBadge}</td>
-      <td><button class="btn-sm btn-outline" onclick="editClient(this,'${c.name}')">Edit</button></td>
+      <td>
+        <button class="btn-sm btn-outline" onclick="editClient(this,'${c.name}')">Edit</button>
+        <button class="btn-sm btn-outline" style="margin-left:4px" title="See what this client sees when they log in" onclick="enterClientPreview('${c.name.replace(/'/g,\"\\\\'\")}')">👁</button>
+      </td>
     </tr>`;
   });
   html += '</tbody></table></div>';
@@ -33749,6 +33753,54 @@ function _getPortalSuburbStats(locs, merged) {
 
   return { fsInSuburbs, omInSuburbs, medianPrice, avgPrice, minPrice, maxPrice, avgDom, medianDom,
            soldInSuburbs, medianSold, priceChanges7d, soldRecent7d, suburbBreakdown };
+}
+
+// ─── Staff "View as client" preview mode ────────────────────────────────
+// Lets Gerard/Mon/Jeremy see exactly what a client sees without messing
+// with DevTools. Enters preview by flipping window.mmUserRole/Client and
+// rebuilding the UI; exits with a full page reload so any staff-only
+// modules (commission tracker etc.) that gate themselves on load can
+// reinitialise cleanly. Preview state is intentionally not persisted —
+// a refresh always drops you back to your real staff view.
+function enterClientPreview(clientName) {
+  if (!clientName) return;
+  window.mmUserRole = 'client';
+  window.mmUserClient = clientName;
+  // Ensure the banner exists before anything else re-renders so the
+  // staff never sees the client view without the "you're previewing" cue.
+  _renderPreviewBanner(clientName);
+  buildTabBar();
+  showTab('dashboard');
+}
+
+function exitClientPreview() {
+  // Full reload is the safest way to restore commission-tracker init,
+  // Agents-Contacted card, etc. — cheaper than trying to un-hide each
+  // gated module by hand.
+  window.location.reload();
+}
+
+function _renderPreviewBanner(clientName) {
+  let bar = document.getElementById('mm-preview-banner');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'mm-preview-banner';
+    bar.style.cssText = [
+      'position:sticky', 'top:0', 'z-index:9999',
+      'background:#C9A84C', 'color:#1C3A2A',
+      'padding:8px 16px', 'font-family:"DM Sans",system-ui,sans-serif',
+      'font-size:13px', 'font-weight:600',
+      'display:flex', 'align-items:center', 'justify-content:space-between',
+      'gap:12px', 'box-shadow:0 2px 6px rgba(0,0,0,0.08)',
+    ].join(';');
+    // Insert at the very top of body so it sits above whatever the app
+    // already has (tab bar, page-title etc).
+    document.body.insertBefore(bar, document.body.firstChild);
+  }
+  bar.innerHTML = `
+    <span>👁 Preview — viewing as <strong>${_swEsc(clientName)}</strong></span>
+    <button onclick="exitClientPreview()" style="background:#1C3A2A;color:#fff;border:none;border-radius:999px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Exit client view</button>
+  `;
 }
 
 // ─── Agent ↔ Client cross-linking (Stage E) ──────────────────────────────
