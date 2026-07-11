@@ -204,7 +204,7 @@ async function hydrateAll() {
     supabase.from('clients').select('id, name, edits, deleted_at').eq('org_id', currentOrgId),
     supabase.from('saved_matches').select('client_id, property_address, suburb, price, property_type, note, saved_at'),
     supabase.from('dismissed_props').select('client_id, property_address, dismissed_at'),
-    supabase.from('presented_props').select('client_id, property_address, presented_at'),
+    supabase.from('presented_props').select('client_id, property_address, presented_at, data'),
     supabase.from('client_comments').select('client_id, body, created_at'),
     supabase.from('client_activity').select('client_id, kind, body, created_at'),
     supabase.from('property_comments').select('property_address, body, created_at').eq('org_id', currentOrgId),
@@ -291,9 +291,16 @@ async function hydrateAll() {
     if (Object.keys(obj).length > 0) c['mmDismissedProps'] = JSON.stringify(obj);
   }
 
-  // mmPresented
+  // mmPresented — hydrate the full JSONB `data` object (suburb, beds/baths,
+  // price, heroPhoto, feedback…). Rows written by an older client that only
+  // set property_address still round-trip: we fall back to a minimal
+  // {address} object so the render doesn't break.
   {
-    const obj = groupByClientName(presented.data || [], (r) => r.property_address);
+    const obj = groupByClientName(presented.data || [], (r) => {
+      const d = r.data && typeof r.data === 'object' ? r.data : {};
+      if (!d.address) d.address = r.property_address;
+      return d;
+    });
     if (Object.keys(obj).length > 0) c['mmPresented'] = JSON.stringify(obj);
   }
 
@@ -556,12 +563,24 @@ const RELATIONAL_ADAPTERS = {
         table: 'presented_props',
         newValue: parseObj(newStr),
         oldValue: parseObj(oldStr),
-        itemToRow: (it, client_id) => ({
-          client_id,
-          property_address: typeof it === 'string' ? it : (it.address || ''),
-          presented_by: currentUserId,
-          presented_at: (it && it.presentedAt) || new Date().toISOString(),
-        }),
+        itemToRow: (it, client_id) => {
+          // Full object goes into the `data` JSONB column so every field
+          // (suburb, beds, baths, price, heroPhoto, feedback…) round-trips.
+          // property_address stays as a top-level scalar so it can be
+          // indexed and queried directly. If someone still hands us a
+          // bare string (legacy write path), coerce to a minimal object.
+          const obj = typeof it === 'object' && it ? it : { address: it || '' };
+          const presentedAt = obj.presentedTs
+            ? new Date(obj.presentedTs).toISOString()
+            : (obj.presentedAt || new Date().toISOString());
+          return {
+            client_id,
+            property_address: obj.address || '',
+            presented_by: currentUserId,
+            presented_at: presentedAt,
+            data: obj,
+          };
+        },
       });
     },
     remove: async () => {},
