@@ -33439,6 +33439,8 @@ function editClient(btn, name) {
       <div class="form-group"><label>Budget</label><input value="${e.budget||client.budget||''}" onchange="saveClientEdit('${name}','budget',this.value)" placeholder="e.g. $5m - $6m"></div>
     </div>
     <div class="form-row">
+      <div class="form-group"><label>Email</label><input type="email" value="${e.email||client.email||''}" onchange="saveClientEdit('${name}','email',this.value)" placeholder="client@email.com"></div>
+      <div class="form-group"><label>Phone</label><input type="tel" value="${e.phone||client.phone||''}" onchange="saveClientEdit('${name}','phone',this.value)" placeholder="04xx xxx xxx"></div>
       <div class="form-group" style="flex:2"><label>Notes</label><input value="${e.notes||client.notes||''}" onchange="saveClientEdit('${name}','notes',this.value)" placeholder="Additional preferences..."></div>
     </div>
     <div style="font-size:11px;color:var(--text-mid);margin-top:6px">Matches auto-filter: Suburbs + Type + Bed/Bath/Car minimums + Budget within ±15% of price guide.</div>
