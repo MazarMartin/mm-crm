@@ -34254,11 +34254,15 @@ function presentProperty(clientName, address, price, suburb, type, beds, baths, 
     presentedDate: dateStr, presentedTs: Date.now(), feedback: ''
   });
   lsSet('mmPresented', all);
-  _logClientActivity(clientName, 'presented', 'Property presented — ' + address);
-  showToast('Presented to ' + clientName.split(' ')[0]);
-  // Refresh the portal
+  // Refresh the modal FIRST — the presented section should update instantly.
+  // Doing this before _logClientActivity + showToast avoids a subtle race
+  // where those side effects were sitting between the write and the close/
+  // reopen and preventing the modal from re-rendering with the new data.
+  // The removePresentedProp function uses this ordering and works fine.
   closeClientProfile();
   openClientProfile(clientName);
+  _logClientActivity(clientName, 'presented', 'Property presented — ' + address);
+  showToast('Presented to ' + clientName.split(' ')[0]);
 }
 
 function savePresentedFeedback(clientName, address, feedback) {
