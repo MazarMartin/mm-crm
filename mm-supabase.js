@@ -160,6 +160,15 @@ function boot() {
       sessionStorage.setItem('mm_auth', '1');
       const inAppGate = document.getElementById('mm-login-screen');
       if (inAppGate) inAppGate.classList.add('hidden');
+      // The app built its tab bar at page load, BEFORE this login resolved —
+      // so a client-role session still shows the staff tabs (clicks are
+      // blocked by the showTab guard, but the buttons are visible). Rebuild
+      // the bar now that the role is known, and land on the dashboard so
+      // role-aware sections re-render with the right visibility.
+      if (window.mmUserRole === 'client') {
+        if (typeof window.buildTabBar === 'function') window.buildTabBar();
+        if (typeof window.showTab === 'function') window.showTab('dashboard');
+      }
       installSignOutButton();
       installFocusRehydrate();
       console.log('[MM-Supabase] hydrated cache:', cache);

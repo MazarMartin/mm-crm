@@ -47300,6 +47300,10 @@ window.addEventListener('appinstalled', () => {
   }
 
   function init(){
+    // Role isn't known until the Supabase login resolves (async), so the
+    // load-time bail at the top of this IIFE can't catch client sessions.
+    // Re-check here and on every interval tick.
+    if (window.mmUserRole === 'client') return;
     applyStatOverrides();
     augmentTables();
     updateCards();
@@ -47309,6 +47313,7 @@ window.addEventListener('appinstalled', () => {
   else document.addEventListener('DOMContentLoaded', init);
 
   setInterval(() => {
+    if (window.mmUserRole === 'client') return;
     applyStatOverrides();
     augmentTables();
     if (isUnlocked()) updateCards();
