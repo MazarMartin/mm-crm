@@ -33788,7 +33788,10 @@ function _renderPreviewBanner(clientName) {
     bar.style.cssText = [
       'position:sticky', 'top:0', 'z-index:9999',
       'background:#C9A84C', 'color:#1C3A2A',
-      'padding:8px 16px', 'font-family:"DM Sans",system-ui,sans-serif',
+      // Right padding is bigger to clear the fixed SIGN OUT button
+      // (installed by mm-supabase.js at top:12px;right:12px, ~100px
+      // wide) so the Exit button doesn't sit underneath it.
+      'padding:8px 140px 8px 16px', 'font-family:"DM Sans",system-ui,sans-serif',
       'font-size:13px', 'font-weight:600',
       'display:flex', 'align-items:center', 'justify-content:space-between',
       'gap:12px', 'box-shadow:0 2px 6px rgba(0,0,0,0.08)',
