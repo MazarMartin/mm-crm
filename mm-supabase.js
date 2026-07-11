@@ -175,6 +175,21 @@ function boot() {
 // ─── Login-time lookups ─────────────────────────────────────────────────
 
 async function fetchOrgId() {
+  // Client-role users aren't org_members. Resolve their org from the
+  // org_id stamped into user_metadata at invite time, falling back to
+  // their own clients row (readable under client_read_own_client_row,
+  // migration 0003) for accounts invited before stamping existed.
+  if (window.mmUserRole === 'client') {
+    const { data: { session } } = await supabase.auth.getSession();
+    const metaOrg = session && session.user && session.user.user_metadata
+      ? session.user.user_metadata.org_id : null;
+    if (metaOrg) return metaOrg;
+    const { data, error } = await supabase
+      .from('clients').select('org_id').limit(1).maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('client account not linked to a client record');
+    return data.org_id;
+  }
   const { data, error } = await supabase
     .from('org_members')
     .select('org_id')

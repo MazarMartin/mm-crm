@@ -59,7 +59,16 @@ Deno.serve(async (req) => {
     }
 
     const admin = createClient(url, serviceKey);
-    const meta = { role: "client", client_name };
+
+    // Stamp the org onto the auth user so fetchOrgId can resolve it for
+    // client-role sessions (they have no org_members row). Single-org
+    // deployment, so first row is the org.
+    const { data: orgs, error: orgErr } =
+      await admin.from("orgs").select("id").limit(1);
+    if (orgErr || !orgs?.length) {
+      return json({ error: orgErr?.message ?? "no org found" }, 500);
+    }
+    const meta = { role: "client", client_name, org_id: orgs[0].id };
 
     // ── Existing user? Refresh metadata + re-send a magic link ─────────
     const { data: list, error: listErr } =

@@ -108,13 +108,16 @@ def main():
 
     secret = get_secret()
 
+    # Org id is needed in BOTH branches: the clients row references it, and
+    # the auth user's metadata carries it so fetchOrgId in the app can
+    # resolve the org for client-role sessions without an org_members row.
+    orgs = api("GET", "/rest/v1/orgs?select=id&limit=1", secret)
+    if not orgs:
+        sys.exit("ERROR: no org found")
+    org_id = orgs[0]["id"]
+
     # ── 1. clients table row ────────────────────────────────────────────
     if not args.no_seed:
-        orgs = api("GET", "/rest/v1/orgs?select=id&limit=1", secret)
-        if not orgs:
-            sys.exit("ERROR: no org found")
-        org_id = orgs[0]["id"]
-
         edits = {k: v for k, v in {
             "section":   args.section,
             "budget":    args.budget,
@@ -134,7 +137,7 @@ def main():
         print(f"✅ clients row upserted for '{args.name}'")
 
     # ── 2 + 3. auth user + email ────────────────────────────────────────
-    meta = {"role": "client", "client_name": args.name}
+    meta = {"role": "client", "client_name": args.name, "org_id": org_id}
     existing = find_user(args.email, secret)
 
     if existing:
