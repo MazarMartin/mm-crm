@@ -73,6 +73,11 @@ if (window._mmSupabaseInit) {
 
 function boot() {
   supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  // Expose on window for console debugging. Not sensitive: the client
+  // just holds the publishable/anon key which is already shipped in this
+  // file. Being able to run `await window.mmSupabase.auth.getSession()`
+  // from the console is worth it when auth flows misbehave.
+  window.mmSupabase = supabase;
   window._mmSupabase = supabase;
 
   const overlay = buildOverlay();
