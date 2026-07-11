@@ -33231,7 +33231,7 @@ function buildSellersSection(edits) {
       <td>${statusBadge}</td>
       <td>
         <button class="btn-sm btn-outline" onclick="editClient(this,'${c.name}')">Edit</button>
-        <button class="btn-sm btn-outline" style="margin-left:4px" title="See what this client sees when they log in" onclick="enterClientPreview('${c.name.replace(/'/g,\"\\\\'\")}')">👁</button>
+        <button class="btn-sm btn-outline" style="margin-left:4px" title="See what this client sees when they log in" onclick="enterClientPreview('${c.name}')">👁</button>
       </td>
     </tr>`;
   });
