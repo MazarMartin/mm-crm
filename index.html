@@ -34095,6 +34095,7 @@ function openClientProfile(clientName) {
           <button class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;border-radius:var(--r-pill);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
             onclick="sendClientInvite(this,'${clientName.replace(/'/g,"\\'")}')">Send login invite</button>
         </div>
+        <div id="mm-invite-status" style="font-size:12px;margin-top:8px;min-height:16px;color:var(--text-mid)"></div>
       </div>`}
 
       <!-- Recent Activity -->
@@ -34174,6 +34175,10 @@ function openClientProfile(clientName) {
   document.body.appendChild(overlay);
   requestAnimationFrame(function(){ overlay.classList.add('open'); });
   document.body.style.overflow = 'hidden';
+  // Async: tell staff whether this client already has a portal login.
+  if (window.mmUserRole !== 'client' && typeof _checkClientLoginStatus === 'function') {
+    _checkClientLoginStatus(merged.email || '');
+  }
   // Escape key handler
   var _clEsc = function(ev){ if(ev.key==='Escape'){ closeClientProfile(); document.removeEventListener('keydown',_clEsc); }};
   document.addEventListener('keydown', _clEsc);
@@ -34210,6 +34215,48 @@ function closeClientProfile() {
 // caller is staff, then creates the client's auth user with
 // {role:'client', client_name} metadata and emails them an invite / fresh
 // magic link. Nothing sensitive ever reaches the browser.
+// Ask the invite-client function whether an auth account already exists
+// for this email, and say so inline — so staff know whether the button
+// will create a new login or just re-send a link to an existing one.
+async function _checkClientLoginStatus(email) {
+  const el = document.getElementById('mm-invite-status');
+  if (!el) return;
+  email = (email || '').trim();
+  if (!email) {
+    el.textContent = 'No email on file yet — enter one above to invite this client.';
+    return;
+  }
+  el.textContent = 'Checking for an existing login…';
+  try {
+    const { data: { session } } = await window.mmSupabase.auth.getSession();
+    if (!session) { el.textContent = ''; return; }
+    const resp = await fetch('https://phkmwcimpyvmxbpdmuvw.supabase.co/functions/v1/invite-client', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + session.access_token,
+        'apikey': 'sb_publishable_aJddeid2D0-0kDWclrNRgQ_nt_kQih5',
+      },
+      body: JSON.stringify({ action: 'check', email: email }),
+    });
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok || out.error) throw new Error(out.error || ('HTTP ' + resp.status));
+    if (out.exists) {
+      const since = out.created_at ? new Date(out.created_at).toLocaleDateString('en-AU') : '';
+      const lastIn = out.last_sign_in_at ? new Date(out.last_sign_in_at).toLocaleDateString('en-AU') : '';
+      el.innerHTML = '<span style="color:#2E7D32;font-weight:600">✓ This client already has a login</span>'
+        + (since ? ' <span style="color:var(--text-light)">· created ' + _swEsc(since) + '</span>' : '')
+        + (lastIn ? ' <span style="color:var(--text-light)">· last signed in ' + _swEsc(lastIn) + '</span>' : '')
+        + '<br><span style="color:var(--text-mid)">The button will re-send their sign-in link, not create a new account.</span>';
+    } else {
+      el.innerHTML = '<span style="color:var(--text-mid)">No login yet — the button will create one and email an invite.</span>';
+    }
+  } catch (e) {
+    console.warn('[invite] status check failed:', e);
+    el.textContent = '';
+  }
+}
+
 async function sendClientInvite(btn, clientName) {
   const input = document.getElementById('mm-invite-email');
   const email = (input ? input.value : '').trim();
@@ -34244,6 +34291,8 @@ async function sendClientInvite(btn, clientName) {
     showToast(out.message || 'Invite sent');
     btn.textContent = out.status === 'resent' ? 'Link re-sent ✓' : 'Invite sent ✓';
     setTimeout(() => { btn.textContent = origLabel; btn.disabled = false; }, 4000);
+    // The account definitely exists now — refresh the status line.
+    _checkClientLoginStatus(email);
   } catch (e) {
     console.error('[invite] failed:', e);
     showToast('Invite failed: ' + (e.message || e));

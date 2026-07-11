@@ -50,8 +50,11 @@ Deno.serve(async (req) => {
     }
 
     // ── Input ───────────────────────────────────────────────────────────
-    const { email, client_name } = await req.json();
-    if (!email || !client_name) {
+    // action: "invite" (default) creates/re-sends; "check" only reports
+    // whether an auth account exists for the email, so the UI can tell
+    // staff up-front instead of them guessing.
+    const { email, client_name, action } = await req.json();
+    if (!email || (!client_name && action !== "check")) {
       return json({ error: "email and client_name are required" }, 400);
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -77,6 +80,16 @@ Deno.serve(async (req) => {
     const existing = list.users.find(
       (u) => (u.email ?? "").toLowerCase() === String(email).toLowerCase(),
     );
+
+    if (action === "check") {
+      return json({
+        ok: true,
+        exists: !!existing,
+        created_at: existing?.created_at ?? null,
+        last_sign_in_at: existing?.last_sign_in_at ?? null,
+        client_name: existing?.user_metadata?.client_name ?? null,
+      });
+    }
 
     if (existing) {
       const { error: updErr } = await admin.auth.admin.updateUserById(
