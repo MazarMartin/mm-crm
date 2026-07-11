@@ -104,20 +104,46 @@ function boot() {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errEl.style.display = 'none';
-    setStatus('Signing in…');
+    setStatus('Sending link…');
     const email = overlay.querySelector('#mm-sb-email').value.trim();
-    const password = overlay.querySelector('#mm-sb-pass').value;
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
+    // shouldCreateUser:false is the security lock — if the email isn't
+    // already a Supabase auth user Gerard has invited, no link is sent
+    // and no account is auto-created. Random visitors typing a real
+    // email get nothing. The UI response is identical either way so
+    // there's no information leak about which emails are registered.
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: window.location.origin + window.location.pathname,
+      },
+    });
+    setStatus('');
+    // We deliberately show the same "check your inbox" message whether
+    // the email was found or not — probing for valid emails should tell
+    // an attacker nothing. Real Supabase errors (network, rate limit)
+    // still surface so legitimate users aren't left staring at nothing.
+    if (error && !/user.*not.*found|invalid/i.test(error.message)) {
       showError(error.message);
-      setStatus('');
       return;
     }
-    await afterLogin(data.session);
+    form.style.display = 'none';
+    overlay.querySelector('#mm-sb-sent').style.display = 'block';
   });
 
   async function afterLogin(session) {
     currentUserId = session.user.id;
+    // Role & client mapping (foundation for the two-tier permission model).
+    // Staff accounts (Gerard/Mon/Jeremy) log in with no user_metadata set —
+    // they default to role='staff' so nothing breaks for existing users.
+    // Client accounts get {role:'client', client_name:'…'} stamped on their
+    // auth user by the "Send login invite" flow (see Edge Function).
+    const meta = (session.user && session.user.user_metadata) || {};
+    window.mmUserRole   = meta.role === 'client' ? 'client' : 'staff';
+    window.mmUserClient = meta.client_name || '';
+    window.mmUserEmail  = (session.user && session.user.email) || '';
+    console.log('[MM-Supabase] session role:', window.mmUserRole,
+                '| client:', window.mmUserClient || '(none)');
     setStatus('Loading…');
     try {
       currentOrgId = await fetchOrgId();
@@ -872,9 +898,12 @@ function buildOverlay() {
       <div id="mm-sb-status" style="font-family:'DM Sans',system-ui,sans-serif;font-size:12px;color:#1C3A2A;text-align:center;letter-spacing:0.5px;display:none;"></div>
       <form id="mm-sb-login" style="display:none;">
         <input id="mm-sb-email" type="email" class="login-input" placeholder="Email" required autocomplete="email" style="letter-spacing:0;">
-        <input id="mm-sb-pass" type="password" class="login-input" placeholder="Password" required autocomplete="current-password" style="margin-top:12px;">
-        <button type="submit" class="login-btn">Sign In</button>
+        <button type="submit" class="login-btn">Send login link</button>
       </form>
+      <div id="mm-sb-sent" style="display:none;font-family:'DM Sans',system-ui,sans-serif;font-size:13px;color:#1C3A2A;text-align:center;line-height:1.6;margin-top:12px;padding:14px 16px;background:rgba(28,58,42,0.06);border-radius:8px;">
+        If that email is registered, we've sent you a login link.<br>
+        <span style="font-size:11px;color:rgba(28,58,42,0.65)">Check your inbox and click the link to sign in.</span>
+      </div>
       <div id="mm-sb-error" class="login-error" style="display:none;"></div>
     </div>
   `;

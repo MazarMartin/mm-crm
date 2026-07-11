@@ -30764,6 +30764,12 @@ function _countNewMatches() {
   return count;
 }
 
+// Tabs the client-role user is allowed to see. Everything else in TABS is
+// staff-only. Matches Gerard's scope: Dashboard, their profile, For Sale
+// ("online"), Sold, Off Market. Buyer Matching, Top Performers, All Agents,
+// MM Report and Local News stay staff-only.
+const CLIENT_ALLOWED_TABS = new Set(['dashboard','clients','forsale','offmarket','sold']);
+
 const TABS = [
   {id:'dashboard',     label:'Dashboard'},
   {id:'clients',       label:'Clients',       count: ()=>(_countNewMatches() + _countAutoMatches()) || null},
@@ -30776,6 +30782,16 @@ const TABS = [
   {id:'mmreport',      label:'MM Report',     count: ()=>{ let c=0; if(typeof propingHistory!=='undefined') for(const d of propingHistory){ if(d.date===_getTodayStr()) { c+=(d.newly_listed||[]).length+(d.price_changes||[]).length+(d.sold||[]).length+(d.auction_changes||[]).length+(d.unlisted||[]).length+(d.over_90_days||[]).length; } } return c||null; }},
   {id:'localnews',     label:'Local News',    count: ()=>{ const n=(D._localNews||[]); return n.length||null; }},
 ];
+
+// Filter TABS by the current user's role. Staff (default) sees all;
+// client-role users see only CLIENT_ALLOWED_TABS. Any code that iterates
+// tabs should use _visibleTabs() rather than TABS directly.
+function _visibleTabs() {
+  if (window.mmUserRole === 'client') {
+    return TABS.filter(t => CLIENT_ALLOWED_TABS.has(t.id));
+  }
+  return TABS;
+}
 
 const TAB_PAGES = {
   dashboard: buildDashboard,
@@ -30791,6 +30807,13 @@ const TAB_PAGES = {
 };
 
 function showTab(id, el) {
+  // Guard: client-role users can only open tabs in CLIENT_ALLOWED_TABS. This
+  // matters because a client could paste a URL hash / call showTab() from
+  // the console — the tab bar hiding it isn't enough on its own.
+  if (window.mmUserRole === 'client' && !CLIENT_ALLOWED_TABS.has(id)) {
+    console.warn('[MM] showTab blocked for client role:', id);
+    return;
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   const page = document.getElementById('page-' + id);
@@ -30803,7 +30826,7 @@ function showTab(id, el) {
 
 function buildTabBar() {
   const bar = document.getElementById('tab-bar');
-  bar.innerHTML = TABS.map((t, i) => {
+  bar.innerHTML = _visibleTabs().map((t, i) => {
     const cntVal = t.count ? t.count() : null;
     const cnt = cntVal ? `<span class="tab-count">${cntVal}</span>` : '';
     return `<button class="tab-btn${i===0?' active':''}" data-tab="${t.id}" onclick="showTab('${t.id}', this)">${t.label}${cnt}</button>`;
@@ -30812,7 +30835,7 @@ function buildTabBar() {
 
 function buildPages() {
   const main = document.getElementById('main-content');
-  main.innerHTML = TABS.map((t, i) =>
+  main.innerHTML = _visibleTabs().map((t, i) =>
     `<div class="page${i===0?' active':''}" id="page-${t.id}"></div>`
   ).join('');
 }
@@ -31282,12 +31305,13 @@ function buildDashboard() {
         <div class="kpi-value">${soldThisWeek}</div>
         <div class="kpi-detail">This week ▾</div>
       </div>
+      ${window.mmUserRole === 'client' ? '' : `
       <div class="kpi-card">
         <div class="kpi-label">Agents Contacted</div>
         <div class="kpi-value">${called+vmed} <span style="font-size:16px;color:var(--text-light)">/ ${totalAgents}</span></div>
         <div class="kpi-bar"><div class="kpi-fill" style="width:${pct}%"></div></div>
         <div class="kpi-detail">${called} called · ${vmed} VM · ${pct}% reached</div>
-      </div>
+      </div>`}
     </div>`;
 
   // ── KPI Dropdown Panels ──
@@ -32748,6 +32772,15 @@ function buildClientsTab() {
   const edits = lsGet('mmClientEdits', {});
   const saved = lsGet('mmClients', []);
 
+  // Client-role users see only their own record — a stripped-down "My File"
+  // view: their preferences (so they can eyeball them for accuracy) plus
+  // any properties Gerard has explicitly presented to them. No other
+  // clients, no buyer matching internals, no agent notes, no stats.
+  if (window.mmUserRole === 'client') {
+    buildClientOwnProfileView(el, edits);
+    return;
+  }
+
   el.innerHTML = `
     <div class="page-title">Clients</div>
     <div class="page-sub">Manage buyers, sellers, and your pipeline</div>
@@ -32788,6 +32821,95 @@ function buildClientsTab() {
   refreshDiv.innerHTML = `<button class="btn-gold" onclick="refreshClientMatches()" style="padding:10px 32px;font-size:14px">Refresh Matches</button>
     <div style="font-size:11px;color:var(--text-light);margin-top:6px">Re-match all clients against current For Sale and Off Market listings</div>`;
   el.appendChild(refreshDiv);
+}
+
+// Client-role view of the Clients tab. Renders "my file" — their own
+// preferences (so they can sanity-check them) plus properties Gerard has
+// presented to them (mmPresented[clientName]). Nothing else.
+function buildClientOwnProfileView(el, edits) {
+  const clientName = window.mmUserClient || '';
+  if (!clientName) {
+    el.innerHTML = `
+      <div class="page-title">My File</div>
+      <div class="empty-state" style="padding:32px">
+        This account isn't linked to a client record yet. Please contact
+        Mazar Martin to finish setting up your login.
+      </div>`;
+    return;
+  }
+  const xlsxClient = (D.xlsxClients || []).find(c => c.name === clientName);
+  const myClient   = (lsGet('mmClients', []) || []).find(c => c.name === clientName);
+  const e = edits[clientName] || {};
+  const client = xlsxClient || myClient || { name: clientName };
+  const merged = { ...client, ...e };
+
+  const locations = (merged.locations || '—').split(/[,;]+/).map(s => s.trim()).filter(Boolean);
+  const budget    = merged.budget || '—';
+  const typePref  = merged.prefType || _parseSpecCriteria(merged.spec || '').types?.[0] || '—';
+  const beds      = merged.prefBeds  || _parseSpecCriteria(merged.spec || '').minBeds  || '—';
+  const baths     = merged.prefBaths || _parseSpecCriteria(merged.spec || '').minBaths || '—';
+  const car       = merged.prefCar   || _parseSpecCriteria(merged.spec || '').minParking || '—';
+  const spec      = merged.spec || '';
+
+  const presented = (lsGet('mmPresented', {})[clientName] || []);
+
+  el.innerHTML = `
+    <div class="page-title">My File</div>
+    <div class="page-sub">Your buyer profile with Mazar Martin</div>
+
+    <div class="cl-section" style="border-left:4px solid var(--green);margin-top:16px">
+      <h4>${_swEsc(clientName)}</h4>
+      <div class="pir-grid" style="grid-template-columns:repeat(2,1fr);margin-top:14px">
+        <div class="pir-metric">
+          <div class="pir-metric-label">Budget</div>
+          <div class="pir-metric-val" style="color:var(--green);font-size:20px">${_swEsc(budget)}</div>
+        </div>
+        <div class="pir-metric">
+          <div class="pir-metric-label">Property Type</div>
+          <div class="pir-metric-val" style="font-size:16px">${_swEsc(typePref)}</div>
+        </div>
+      </div>
+      <div class="pir-grid" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
+        <div class="pir-metric"><div class="pir-metric-label">Beds</div><div class="pir-metric-val">${_swEsc(beds)}</div></div>
+        <div class="pir-metric"><div class="pir-metric-label">Baths</div><div class="pir-metric-val">${_swEsc(baths)}</div></div>
+        <div class="pir-metric"><div class="pir-metric-label">Car</div><div class="pir-metric-val">${_swEsc(car)}</div></div>
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-light);margin-bottom:6px">Suburbs</div>
+        <div>${locations.map(s => `<span class="suburb-pill" style="margin:2px">${_swEsc(s)}</span>`).join(' ') || '—'}</div>
+      </div>
+      ${spec && spec !== '—' ? `<div style="margin-top:14px">
+        <div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-light);margin-bottom:4px">Additional Requirements</div>
+        <div style="font-size:13px;color:var(--text-mid);line-height:1.6">${_swEsc(spec)}</div>
+      </div>` : ''}
+      <div style="margin-top:16px;font-size:12px;color:var(--text-light);font-style:italic">
+        If any of the above needs updating, please let your buyer's agent at Mazar Martin know.
+      </div>
+    </div>
+
+    <div class="cl-section" style="border-left:4px solid #1565C0;margin-top:16px">
+      <h4>Properties Presented to You <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${presented.length}</span></h4>
+      ${presented.length ? `
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+          ${presented.slice().reverse().map(p => {
+            const pDate = p.date ? new Date(p.date).toLocaleDateString('en-AU') : '';
+            return `
+            <div style="padding:12px 14px;background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px">
+              <div style="font-weight:600;color:#1C3A2A;font-size:14px">${_swEsc(p.address || '')}</div>
+              <div style="font-size:12px;color:var(--text-mid);margin-top:4px">
+                ${_swEsc(p.suburb || '')} · ${_swEsc(p.type || '')} · ${_swEsc(p.beds || '?')} bed · ${_swEsc(p.baths || '?')} bath
+                ${pDate ? ` · <span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      ` : `
+        <div class="empty-state" style="padding:24px;margin-top:10px">
+          No properties presented yet. When your buyer's agent finds something worth showing, it'll appear here.
+        </div>
+      `}
+    </div>
+  `;
 }
 
 function moveToSettlements(name) {
@@ -46493,6 +46615,14 @@ window.addEventListener('appinstalled', () => {
 (function(){
   if (window._mmCommissionTrackerLoaded) return;
   window._mmCommissionTrackerLoaded = true;
+  // Client-role users must never see commission cards, HOT-lead value,
+  // bought-this-month totals, or any other commercial numbers. Bail out
+  // of the entire commission tracker early — this leaves the plain
+  // dashboard shell for them and no wiring is needed elsewhere.
+  if (window.mmUserRole === 'client') {
+    console.log('[MM-Commission] disabled for client role');
+    return;
+  }
 
   const MM_CLIENTS = [{"name": "Hayden & Terry Neeland", "section": "Active Buyers"}, {"name": "Jack", "section": "Active Buyers"}, {"name": "Jaidene and Jamie Simon", "section": "Active Buyers"}, {"name": "Brahman + Priyanka", "section": "Active Buyers"}, {"name": "Joey & Sarah", "section": "Active Buyers"}, {"name": "Ellen + Craig Dadley", "section": "Active Buyers"}, {"name": "Kerry Buck", "section": "Active Buyers"}, {"name": "Jeshma & Jayesh Mowjee", "section": "Active Buyers"}, {"name": "Paul + Gemma Evans", "section": "Active Buyers"}, {"name": "Ken Tung", "section": "Active Buyers"}, {"name": "Jimmy", "section": "Active Buyers"}, {"name": "Cameron + Allegra", "section": "Active Buyers"}, {"name": "Vashti Singh", "section": "Active Buyers"}, {"name": "Mark + Natalie", "section": "Active Buyers"}, {"name": "Nicholas + Caroline", "section": "Active Buyers"}, {"name": "Ruth and Gordon Phillips", "section": "Sellers"}, {"name": "Lincoln + Stef Mortlock", "section": "Sellers"}, {"name": "Lea Luo", "section": "Sellers"}, {"name": "Janet O'Hagan", "section": "Sellers"}, {"name": "Novack + Nunn", "section": "Sellers"}, {"name": "Sunil", "section": "Sellers"}, {"name": "Browyn and Paul", "section": "Pipeline"}, {"name": "Tessa", "section": "Pipeline"}, {"name": "Peter Blood", "section": "Pipeline"}, {"name": "Alisha & Jody", "section": "Pipeline"}, {"name": "Bevan & Nat Pooley", "section": "Pipeline"}, {"name": "x", "section": "Pipeline"}, {"name": "Anita + John", "section": "Pipeline"}, {"name": "Elliot and Stef Samuel", "section": "Pipeline"}, {"name": "Steve Wang", "section": "Pipeline"}, {"name": "Kristie Ward", "section": "Pipeline"}, {"name": "Jared and Chelsea", "section": "Pipeline"}, {"name": "Matt Findley", "section": "Pipeline"}, {"name": "Michelle Yu", "section": "Pipeline"}, {"name": "Ella Yang", "section": "Pipeline"}, {"name": "Peter", "section": "Pipeline"}, {"name": "Sue and Nigle Pollard", "section": "Pipeline"}, {"name": "Nicola Finn", "section": "Pipeline"}, {"name": "Amanda Fileman", "section": "Pipeline"}, {"name": "David Steblina", "section": "Pipeline"}, {"name": "Yana Walter", "section": "Pipeline"}, {"name": "Elisha Hopkinson", "section": "Pipeline"}, {"name": "Michael Young - 0428 885 880", "section": "Pipeline"}, {"name": "Mr.Cao", "section": "Pipeline"}, {"name": "Kelly Mu and Ryan", "section": "Pipeline"}, {"name": "Marjorie Conway", "section": "Pipeline"}, {"name": "Joe Callus", "section": "Pipeline"}, {"name": "Tracy Yap", "section": "Pipeline"}, {"name": "Bec and Les", "section": "Pipeline"}, {"name": "Madeleine Kong", "section": "Pipeline"}, {"name": "Brad Sneddon", "section": "Pipeline"}, {"name": "Cheryl Thorne", "section": "Pipeline"}, {"name": "Stephen Webster", "section": "Pipeline"}, {"name": "Cormacks - Mark and Kim", "section": "Pipeline"}, {"name": "Tessa & Tim", "section": "Active Buyer"}, {"name": "Peter Blood + Shenei Croll", "section": "Active Buyer"}, {"name": "Sadia", "section": "Pipeline"}, {"name": "Robyn Strang", "section": "Pipeline"}, {"name": "David Stephens", "section": "Pipeline"}, {"name": "Cynthia & Douglas Rutter", "section": "Pipeline"}, {"name": "Chris Hunt", "section": "Pipeline"}, {"name": "Jonothan O'Dea", "section": "Pipeline"}];
   window.MM_CLIENTS = MM_CLIENTS;
