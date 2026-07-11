@@ -32890,7 +32890,7 @@ function buildClientOwnProfileView(el, edits) {
     <div class="cl-section" style="border-left:4px solid #1565C0;margin-top:16px">
       <h4>Properties Presented to You <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${presented.length}</span></h4>
       ${presented.length ? `
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:14px">
           ${presented.slice().reverse().map(rawP => {
             // Older versions of the swipe/present flow wrote bare address
             // strings into mmPresented instead of objects. Coerce those to
@@ -32921,7 +32921,7 @@ function buildClientOwnProfileView(el, edits) {
             // sees the URL as a stray attribute. Percent-encode any stray
             // single quotes in the URL for safety.
             const photoHtml = photo
-              ? `<div style="height:180px;background:#e8e4db url('${String(photo).replace(/'/g, '%27')}') center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
+              ? `<div style="aspect-ratio:16/10;background:#e8e4db url('${String(photo).replace(/'/g, '%27')}') center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
               : '';
             return `
             <div style="background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px;overflow:hidden">
