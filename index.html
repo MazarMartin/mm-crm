@@ -34049,7 +34049,7 @@ function openClientProfile(clientName) {
                 <span style="font-weight:700;color:var(--green);font-size:16px">${l.guidePrice||l.price||'—'}</span>
                 <span style="font-size:11px;color:var(--text-light)">${l.agent||''} · ${l.agency||''}${dom ? ' · ' + dom + ' DOM' : ''}</span>
               </div>
-              ${!alreadyPresented ? `<div style="margin-top:8px;text-align:right"><button class="btn btn-sm" style="background:var(--green);color:#fff;border:none;border-radius:var(--r-pill);cursor:pointer;font-size:10px;padding:4px 12px" onclick="presentProperty('${_eName}',this)" data-addr="${(l.address||'').replace(/"/g,'&quot;')}" data-suburb="${(l.suburb||'').replace(/"/g,'&quot;')}" data-price="${(l.guidePrice||l.price||'').replace(/"/g,'&quot;')}" data-type="${(l.propertyType||l.type||'').replace(/"/g,'&quot;')}" data-beds="${l.beds||''}" data-baths="${l.baths||''}" data-source="${l._src}">Present</button></div>` : '<div style="margin-top:6px;text-align:right;font-size:10px;color:var(--text-light)">Already presented</div>'}
+              ${!alreadyPresented ? `<div style="margin-top:8px;text-align:right"><button class="btn btn-sm" style="background:var(--green);color:#fff;border:none;border-radius:var(--r-pill);cursor:pointer;font-size:10px;padding:4px 12px" onclick="presentPropertyFromBtn(this,'${_eName}')" data-addr="${(l.address||'').replace(/"/g,'&quot;')}" data-suburb="${(l.suburb||'').replace(/"/g,'&quot;')}" data-price="${(l.guidePrice||l.price||'').replace(/"/g,'&quot;')}" data-type="${(l.propertyType||l.type||'').replace(/"/g,'&quot;')}" data-beds="${l.beds||''}" data-baths="${l.baths||''}" data-car="${l.parking||l.car||''}" data-source="${l._src}">Present</button></div>` : '<div style="margin-top:6px;text-align:right;font-size:10px;color:var(--text-light)">Already presented</div>'}
             </div>`;
           }).join('') : '<div style="padding:20px;text-align:center;color:var(--text-mid);font-size:13px">No properties match this brief right now</div>'}
           ${allMatches.length > 10 ? `<div style="text-align:center;font-size:11px;color:var(--text-light)">+ ${allMatches.length - 10} more matches</div>` : ''}
@@ -34192,6 +34192,27 @@ function closeClientProfile() {
 }
 
 // ── Presented Properties Management ──
+// Wrapper for Present buttons that stash their fields as data-* attrs on
+// the element. Reads them off `btn.dataset` and forwards to positional
+// presentProperty. Previously the openClientProfile Match Summary Present
+// button was calling `presentProperty(name, this)` which crashed inside
+// `address.toLowerCase()` — the card animated away but nothing actually
+// got saved and the Presented section never refreshed.
+function presentPropertyFromBtn(btn, clientName) {
+  const d = btn.dataset || {};
+  presentProperty(
+    clientName,
+    d.addr || '',
+    d.price || '',
+    d.suburb || '',
+    d.type || '',
+    d.beds || '',
+    d.baths || '',
+    d.car || '',
+    d.source || ''
+  );
+}
+
 // Look up a heroPhoto URL for an address by scanning current listing
 // sources. Used both when persisting new presentations (so the URL is
 // captured at present-time) and when rendering existing presentations
