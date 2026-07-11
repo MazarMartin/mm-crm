@@ -32891,7 +32891,12 @@ function buildClientOwnProfileView(el, edits) {
       <h4>Properties Presented to You <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${presented.length}</span></h4>
       ${presented.length ? `
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-          ${presented.slice().reverse().map(p => {
+          ${presented.slice().reverse().map(rawP => {
+            // Older versions of the swipe/present flow wrote bare address
+            // strings into mmPresented instead of objects. Coerce those to
+            // a minimal object so the render doesn't blow up on p.address
+            // / p.beds / etc.
+            const p = typeof rawP === 'string' ? { address: rawP } : rawP;
             // Presented items save the date as `presentedDate` (already a
             // formatted string like "10 Jul 2026") and `presentedTs` (ms).
             // Older records may only have `date` — fall through the options.
@@ -32899,6 +32904,13 @@ function buildClientOwnProfileView(el, edits) {
                           (p.presentedTs ? new Date(p.presentedTs).toLocaleDateString('en-AU') : '') ||
                           p.date || '';
             const price = p.price ? ' · ' + _swEsc(p.price) : '';
+            // Only render the metadata row if we have SOMETHING to show —
+            // otherwise a legacy string-only entry becomes " ·  · ? bed …"
+            const hasMeta = p.suburb || p.type || p.beds || p.baths || p.price;
+            const bedText  = p.beds  ? _swEsc(p.beds)  + ' bed'  : '';
+            const bathText = p.baths ? _swEsc(p.baths) + ' bath' : '';
+            const parts = [p.suburb, p.type, bedText, bathText].map(x => _swEsc(x || '')).filter(Boolean);
+            const metaLine = parts.join(' · ') + (price ? (parts.length ? '' : '') + price : '');
             // Photo: use the stored heroPhoto for items presented after the
             // fix, or dynamically look up from current listings so items
             // stored before this change also render with photos.
@@ -32911,10 +32923,9 @@ function buildClientOwnProfileView(el, edits) {
               ${photoHtml}
               <div style="padding:12px 14px">
                 <div style="font-weight:600;color:#1C3A2A;font-size:14px">${_swEsc(p.address || '')}</div>
-                <div style="font-size:12px;color:var(--text-mid);margin-top:4px">
-                  ${_swEsc(p.suburb || '')} · ${_swEsc(p.type || '')} · ${_swEsc(p.beds || '?')} bed · ${_swEsc(p.baths || '?')} bath${price}
-                  ${pDate ? ` · <span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
-                </div>
+                ${hasMeta || pDate ? `<div style="font-size:12px;color:var(--text-mid);margin-top:4px">
+                  ${metaLine}${hasMeta && pDate ? ' · ' : ''}${pDate ? `<span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
+                </div>` : ''}
               </div>
             </div>`;
           }).join('')}
