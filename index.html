@@ -34056,25 +34056,9 @@ function openClientProfile(clientName) {
         </div>
       </div>
 
-      <!-- Presented -->
-      <div class="cl-section" style="border-left:4px solid var(--green)">
-        <h4>Presented — ${presented.length} properties</h4>
-        ${presented.length ? presented.map(p => {
-            const pDate = p.presentedDate || '';
-            const feedbackVal = p.feedback || '';
-            return `<div style="padding:12px 16px;background:var(--surface-warm);border:1px solid var(--border-light);border-radius:var(--r-sm);margin-bottom:8px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <span style="font-weight:600;font-size:13px;color:var(--text)">${p.address||''}</span>
-                <span style="font-weight:700;color:var(--green);font-size:14px">${p.price||'—'}</span>
-              </div>
-              <div style="font-size:11px;color:var(--text-mid)">${p.suburb||''} · ${p.type||''} · ${p.beds||'?'} bed · ${p.baths||'?'} bath · Presented ${pDate}</div>
-              <div style="display:flex;gap:6px;align-items:start;margin-top:8px">
-                <textarea placeholder="Feedback..." style="flex:1;border:1px solid var(--border);border-radius:var(--r-sm);padding:6px 10px;font-size:11px;font-family:var(--ff-ui);resize:vertical;min-height:36px" onblur="savePresentedFeedback('${_eName}','${(p.address||'').replace(/'/g,"\\'")}',this.value)">${feedbackVal}</textarea>
-                <button class="btn btn-sm" style="background:#D32F2F;color:#fff;font-size:10px;padding:4px 10px;border-radius:var(--r-pill);border:none;cursor:pointer;white-space:nowrap" onclick="removePresentedProp('${_eName}','${(p.address||'').replace(/'/g,"\\'")}')">Remove</button>
-              </div>
-            </div>`;
-          }).join('') : '<div style="padding:20px;text-align:center;color:var(--text-mid);font-size:13px">No properties presented yet</div>'}
-      </div>
+      <!-- Presented (markup built by _buildPresentedSectionHTML so the
+           swipe deck can refresh it in place after a right-swipe) -->
+      ${_buildPresentedSectionHTML(clientName)}
 
       <!-- Notes -->
       <div class="cl-section" style="border-left:4px solid var(--gold)">
@@ -34192,6 +34176,44 @@ function closeClientProfile() {
 }
 
 // ── Presented Properties Management ──
+// Builds the staff-side "Presented — N properties" section for a client's
+// profile slide. Extracted from openClientProfile's inline template so the
+// swipe deck can re-render it in place immediately after a right-swipe —
+// previously the section was built once at slide-open and went stale until
+// the profile was closed and reopened.
+function _buildPresentedSectionHTML(clientName) {
+  const presented = lsGet('mmPresented', {})[clientName] || [];
+  const _eName = clientName.replace(/'/g, "\\'");
+  return `<div class="cl-section" id="mm-presented-section" style="border-left:4px solid var(--green)">
+        <h4>Presented — ${presented.length} properties</h4>
+        ${presented.length ? presented.map(p => {
+            const pDate = p.presentedDate || '';
+            const feedbackVal = p.feedback || '';
+            return `<div style="padding:12px 16px;background:var(--surface-warm);border:1px solid var(--border-light);border-radius:var(--r-sm);margin-bottom:8px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span style="font-weight:600;font-size:13px;color:var(--text)">${p.address||''}</span>
+                <span style="font-weight:700;color:var(--green);font-size:14px">${p.price||'—'}</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-mid)">${p.suburb||''} · ${p.type||''} · ${p.beds||'?'} bed · ${p.baths||'?'} bath · Presented ${pDate}</div>
+              <div style="display:flex;gap:6px;align-items:start;margin-top:8px">
+                <textarea placeholder="Feedback..." style="flex:1;border:1px solid var(--border);border-radius:var(--r-sm);padding:6px 10px;font-size:11px;font-family:var(--ff-ui);resize:vertical;min-height:36px" onblur="savePresentedFeedback('${_eName}','${(p.address||'').replace(/'/g,"\\'")}',this.value)">${feedbackVal}</textarea>
+                <button class="btn btn-sm" style="background:#D32F2F;color:#fff;font-size:10px;padding:4px 10px;border-radius:var(--r-pill);border:none;cursor:pointer;white-space:nowrap" onclick="removePresentedProp('${_eName}','${(p.address||'').replace(/'/g,"\\'")}')">Remove</button>
+              </div>
+            </div>`;
+          }).join('') : '<div style="padding:20px;text-align:center;color:var(--text-mid);font-size:13px">No properties presented yet</div>'}
+      </div>`;
+}
+
+// Re-render the Presented section inside an open client profile slide.
+// No-op when the slide isn't open (e.g. swiping from the Clients tab deck).
+function _refreshPresentedSection(clientName) {
+  const overlay = document.getElementById('clientProfileOverlay');
+  if (!overlay) return;
+  const sec = overlay.querySelector('#mm-presented-section');
+  if (!sec) return;
+  sec.outerHTML = _buildPresentedSectionHTML(clientName);
+}
+
 // Wrapper for Present buttons that stash their fields as data-* attrs on
 // the element. Reads them off `btn.dataset` and forwards to positional
 // presentProperty. Previously the openClientProfile Match Summary Present
@@ -35065,6 +35087,10 @@ function _swRenderDeck(clientName, client, locs, rootEl) {
         presentedTs: Date.now()
       });
       lsSet('mmPresented', pres);
+      // Live-update the "Presented — N properties" section if the client
+      // profile slide is open. The deck itself keeps its own state; without
+      // this the section stayed stale until the slide was closed/reopened.
+      if (typeof _refreshPresentedSection === 'function') _refreshPresentedSection(clientName);
     } else {
       // Save to dismissed with note
       const dis = lsGet('mmDismissedProps', {});

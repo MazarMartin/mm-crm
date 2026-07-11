@@ -760,13 +760,25 @@ const WRITE_ADAPTERS = (() => {
 // or navigation.
 
 const MIN_REHYDRATE_MS = 10_000; // don't re-hydrate more than once per 10s
+const WRITE_SETTLE_MS  = 5_000;  // let recent writes reach Supabase first
 let lastHydrateAt = 0;
 let isRehydrating = false;
+// Write-in-flight tracking. A re-hydrate replaces the whole cache with
+// whatever Supabase returns — if a local write (e.g. "Present" saving to
+// mmPresented) hasn't landed on the server yet, the re-hydrate would
+// clobber it and the user's action silently vanishes. Track in-flight
+// writes and skip re-hydrates until they've settled.
+let pendingWrites = 0;
+let lastWriteDoneTs = 0;
 
 async function rehydrateNow(reason) {
   if (isRehydrating) return;
   if (!currentOrgId) return;
   if (Date.now() - lastHydrateAt < MIN_REHYDRATE_MS) return;
+  if (pendingWrites > 0 || Date.now() - lastWriteDoneTs < WRITE_SETTLE_MS) {
+    console.log('[MM-Supabase] re-hydrate skipped (' + reason + ') — local writes still settling');
+    return;
+  }
   isRehydrating = true;
   try {
     const fresh = await hydrateAll();
@@ -832,10 +844,14 @@ function installLocalStorageOverrides() {
       cache[key] = newStr;
       const a = WRITE_ADAPTERS[key];
       if (a && a.write) {
+        pendingWrites++;
         a.write(newStr, oldStr).then(
           () => console.log(`[MM-Supabase] saved ${key}`),
           (e) => console.error(`[MM-Supabase] write failed for ${key}:`, e)
-        );
+        ).finally(() => {
+          pendingWrites = Math.max(0, pendingWrites - 1);
+          lastWriteDoneTs = Date.now();
+        });
       }
       return;
     }
@@ -848,10 +864,14 @@ function installLocalStorageOverrides() {
       delete cache[key];
       const a = WRITE_ADAPTERS[key];
       if (a && a.remove) {
+        pendingWrites++;
         a.remove(oldStr).then(
           () => console.log(`[MM-Supabase] removed ${key}`),
           (e) => console.error(`[MM-Supabase] delete failed for ${key}:`, e)
-        );
+        ).finally(() => {
+          pendingWrites = Math.max(0, pendingWrites - 1);
+          lastWriteDoneTs = Date.now();
+        });
       }
       return;
     }
