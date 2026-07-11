@@ -33130,6 +33130,17 @@ function buildActiveBuyersSection(edits) {
     if (override) return override === 'active' || override === 'Active Buyer';
     return (c.section||'').includes('Buyer');
   });
+  // Include buyers that exist only in mmClientEdits (e.g. clients seeded
+  // straight into Supabase, like portal test accounts) — the same
+  // edits-only inclusion buildPipelineSection already does for leads.
+  const bakedNames = new Set((D.xlsxClients||[]).map(c => c.name));
+  for (const [name, e] of Object.entries(edits)) {
+    if (bakedNames.has(name)) continue;
+    const sec = e.section || '';
+    if (sec === 'active' || (sec||'').includes('Buyer')) {
+      buyers.push({ name, section: 'Active Buyer', ba: e.ba });
+    }
+  }
   // Sort by temperature: Hot → Warm → Cold
   const _tord = {hot:0,warm:1,cold:2};
   buyers.sort((a,b) => (_tord[(_getBuyerTemp(a.name)||'warm').toLowerCase()]??1) - (_tord[(_getBuyerTemp(b.name)||'warm').toLowerCase()]??1));
