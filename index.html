@@ -34974,6 +34974,7 @@ function _swRenderDeck(clientName, client, locs, rootEl) {
         price: l.guidePrice||l.price||'', beds: l.beds||l.bed||'', baths: l.baths||l.bath||'',
         car: l.parking||l.car||'', landSize: l.landSize||l.land||'',
         source: l._src === 'offmkt' ? 'Off Market' : 'Online',
+        heroPhoto: l.heroPhoto || (typeof _mmLookupHeroPhoto === 'function' ? _mmLookupHeroPhoto(l.address) : ''),
         feedback: note,
         presentedDate: new Date().toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}),
         presentedTs: Date.now()
