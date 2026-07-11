@@ -32892,13 +32892,29 @@ function buildClientOwnProfileView(el, edits) {
       ${presented.length ? `
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
           ${presented.slice().reverse().map(p => {
-            const pDate = p.date ? new Date(p.date).toLocaleDateString('en-AU') : '';
+            // Presented items save the date as `presentedDate` (already a
+            // formatted string like "10 Jul 2026") and `presentedTs` (ms).
+            // Older records may only have `date` — fall through the options.
+            const pDate = p.presentedDate ||
+                          (p.presentedTs ? new Date(p.presentedTs).toLocaleDateString('en-AU') : '') ||
+                          p.date || '';
+            const price = p.price ? ' · ' + _swEsc(p.price) : '';
+            // Photo: use the stored heroPhoto for items presented after the
+            // fix, or dynamically look up from current listings so items
+            // stored before this change also render with photos.
+            const photo = p.heroPhoto || _mmLookupHeroPhoto(p.address || '');
+            const photoHtml = photo
+              ? `<div style="height:180px;background:#e8e4db url(${JSON.stringify(photo)}) center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
+              : '';
             return `
-            <div style="padding:12px 14px;background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px">
-              <div style="font-weight:600;color:#1C3A2A;font-size:14px">${_swEsc(p.address || '')}</div>
-              <div style="font-size:12px;color:var(--text-mid);margin-top:4px">
-                ${_swEsc(p.suburb || '')} · ${_swEsc(p.type || '')} · ${_swEsc(p.beds || '?')} bed · ${_swEsc(p.baths || '?')} bath
-                ${pDate ? ` · <span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
+            <div style="background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px;overflow:hidden">
+              ${photoHtml}
+              <div style="padding:12px 14px">
+                <div style="font-weight:600;color:#1C3A2A;font-size:14px">${_swEsc(p.address || '')}</div>
+                <div style="font-size:12px;color:var(--text-mid);margin-top:4px">
+                  ${_swEsc(p.suburb || '')} · ${_swEsc(p.type || '')} · ${_swEsc(p.beds || '?')} bed · ${_swEsc(p.baths || '?')} bath${price}
+                  ${pDate ? ` · <span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
+                </div>
               </div>
             </div>`;
           }).join('')}
@@ -34105,6 +34121,29 @@ function closeClientProfile() {
 }
 
 // ── Presented Properties Management ──
+// Look up a heroPhoto URL for an address by scanning current listing
+// sources. Used both when persisting new presentations (so the URL is
+// captured at present-time) and when rendering existing presentations
+// that were saved before we started storing photos.
+function _mmLookupHeroPhoto(address) {
+  const key = (address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!key) return '';
+  // Fresh newly_listed items across recent days
+  if (typeof propingHistory !== 'undefined') {
+    for (const day of propingHistory) {
+      for (const l of (day.newly_listed || [])) {
+        if ((l.address || '').toLowerCase().replace(/[^a-z0-9]/g, '') === key && l.heroPhoto) {
+          return l.heroPhoto;
+        }
+      }
+    }
+  }
+  const fromSample = (D.sampleListings || []).find(l =>
+    (l.address || '').toLowerCase().replace(/[^a-z0-9]/g, '') === key && l.heroPhoto);
+  if (fromSample) return fromSample.heroPhoto;
+  return '';
+}
+
 function presentProperty(clientName, address, price, suburb, type, beds, baths, car, source) {
   const all = lsGet('mmPresented', {});
   if (!all[clientName]) all[clientName] = [];
@@ -34119,6 +34158,7 @@ function presentProperty(clientName, address, price, suburb, type, beds, baths, 
   all[clientName].push({
     address: address, price: price, suburb: suburb, type: type,
     beds: beds, baths: baths, car: car, source: source,
+    heroPhoto: _mmLookupHeroPhoto(address),
     presentedDate: dateStr, presentedTs: Date.now(), feedback: ''
   });
   lsSet('mmPresented', all);
