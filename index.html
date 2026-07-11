@@ -34068,6 +34068,24 @@ function openClientProfile(clientName) {
         </div>
       </div>
 
+      <!-- Client Login (staff only — invite this client to the portal) -->
+      ${window.mmUserRole === 'client' ? '' : `
+      <div class="cl-section" style="border-left:4px solid #7C3AED">
+        <h4>Client Login</h4>
+        <div style="font-size:12px;color:var(--text-mid);margin:6px 0 10px;line-height:1.5">
+          Give this client their own login. They'll see the dashboard, For Sale,
+          Off Market, Sold, and their own file — nothing else. Sending again
+          re-sends the login link to an existing account.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="mm-invite-email" type="email" placeholder="client@email.com"
+            value="${_swEsc(merged.email || '')}"
+            style="flex:1 1 220px;min-width:200px;padding:8px 12px;font-size:13px;border:1px solid var(--border-light);border-radius:var(--r-sm);background:#fff">
+          <button class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;border-radius:var(--r-pill);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
+            onclick="sendClientInvite(this,'${clientName.replace(/'/g,"\\'")}')">Send login invite</button>
+        </div>
+      </div>`}
+
       <!-- Recent Activity -->
       ${(function(){
         const stored = (lsGet('mmClientActivity', {})[clientName] || []);
@@ -34173,6 +34191,54 @@ function closeClientProfile() {
   const overlay = document.getElementById('clientProfileOverlay');
   if (overlay) { overlay.classList.remove('open'); setTimeout(function(){ overlay.remove(); }, 300); }
   document.body.style.overflow = '';
+}
+
+// ── Client Login invites ──
+// Calls the invite-client Edge Function with the staff user's own session
+// JWT. The function (server-side, holds the service-role key) verifies the
+// caller is staff, then creates the client's auth user with
+// {role:'client', client_name} metadata and emails them an invite / fresh
+// magic link. Nothing sensitive ever reaches the browser.
+async function sendClientInvite(btn, clientName) {
+  const input = document.getElementById('mm-invite-email');
+  const email = (input ? input.value : '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    showToast('Enter a valid email first');
+    return;
+  }
+  // Persist the email onto the client record so it's pre-filled next time
+  // (and syncs to Supabase via the mmClientEdits adapter).
+  const edits = lsGet('mmClientEdits', {});
+  if (!edits[clientName]) edits[clientName] = {};
+  edits[clientName].email = email;
+  lsSet('mmClientEdits', edits);
+
+  const origLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const { data: { session } } = await window.mmSupabase.auth.getSession();
+    if (!session) throw new Error('Not signed in');
+    const resp = await fetch('https://phkmwcimpyvmxbpdmuvw.supabase.co/functions/v1/invite-client', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + session.access_token,
+        'apikey': 'sb_publishable_aJddeid2D0-0kDWclrNRgQ_nt_kQih5',
+      },
+      body: JSON.stringify({ email: email, client_name: clientName }),
+    });
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok || out.error) throw new Error(out.error || ('HTTP ' + resp.status));
+    showToast(out.message || 'Invite sent');
+    btn.textContent = out.status === 'resent' ? 'Link re-sent ✓' : 'Invite sent ✓';
+    setTimeout(() => { btn.textContent = origLabel; btn.disabled = false; }, 4000);
+  } catch (e) {
+    console.error('[invite] failed:', e);
+    showToast('Invite failed: ' + (e.message || e));
+    btn.textContent = origLabel;
+    btn.disabled = false;
+  }
 }
 
 // ── Presented Properties Management ──
