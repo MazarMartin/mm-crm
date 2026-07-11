@@ -33985,6 +33985,25 @@ function openClientProfile(clientName) {
         </div>
       </div>
 
+      <!-- Client Login (staff only — invite this client to the portal) -->
+      ${window.mmUserRole === 'client' ? '' : `
+      <div class="cl-section" style="border-left:4px solid #7C3AED">
+        <h4>Client Login</h4>
+        <div style="font-size:12px;color:var(--text-mid);margin:6px 0 10px;line-height:1.5">
+          Give this client their own login. They'll see the dashboard, For Sale,
+          Off Market, Sold, and their own file — nothing else. Sending again
+          re-sends the login link to an existing account.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="mm-invite-email" type="email" placeholder="client@email.com"
+            value="${_swEsc(merged.email || '')}"
+            style="flex:1 1 220px;min-width:200px;padding:8px 12px;font-size:13px;border:1px solid var(--border-light);border-radius:var(--r-sm);background:#fff">
+          <button class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;border-radius:var(--r-pill);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
+            onclick="sendClientInvite(this,'${clientName.replace(/'/g,"\\'")}')">Send login invite</button>
+        </div>
+        <div id="mm-invite-status" style="font-size:12px;margin-top:8px;min-height:16px;color:var(--text-mid)"></div>
+      </div>`}
+
       <!-- Search Criteria -->
       <div class="cl-section" style="border-left:4px solid var(--gold)">
         <h4>Search Criteria</h4>
@@ -34078,25 +34097,6 @@ function openClientProfile(clientName) {
           <textarea placeholder="Add notes about this client..." onblur="saveClientGeneralComment('${clientName.replace(/'/g,"\\'")}', this.value)">${generalComment}</textarea>
         </div>
       </div>
-
-      <!-- Client Login (staff only — invite this client to the portal) -->
-      ${window.mmUserRole === 'client' ? '' : `
-      <div class="cl-section" style="border-left:4px solid #7C3AED">
-        <h4>Client Login</h4>
-        <div style="font-size:12px;color:var(--text-mid);margin:6px 0 10px;line-height:1.5">
-          Give this client their own login. They'll see the dashboard, For Sale,
-          Off Market, Sold, and their own file — nothing else. Sending again
-          re-sends the login link to an existing account.
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="mm-invite-email" type="email" placeholder="client@email.com"
-            value="${_swEsc(merged.email || '')}"
-            style="flex:1 1 220px;min-width:200px;padding:8px 12px;font-size:13px;border:1px solid var(--border-light);border-radius:var(--r-sm);background:#fff">
-          <button class="btn btn-sm" style="background:#7C3AED;color:#fff;border:none;border-radius:var(--r-pill);padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap"
-            onclick="sendClientInvite(this,'${clientName.replace(/'/g,"\\'")}')">Send login invite</button>
-        </div>
-        <div id="mm-invite-status" style="font-size:12px;margin-top:8px;min-height:16px;color:var(--text-mid)"></div>
-      </div>`}
 
       <!-- Recent Activity -->
       ${(function(){
