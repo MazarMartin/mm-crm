@@ -74,6 +74,10 @@ const MANAGED_KEYS = new Set([...USER_KV_KEYS, ...ORG_KV_KEYS, ...RELATIONAL_KEY
 let supabase = null;
 let currentUserId = null;
 let currentOrgId = null;
+// Client roster loaded from the clients table each hydration, then handed
+// to the app via window.mmApplyClientRoster. Replaces the roster that was
+// previously baked into index.html and therefore publicly downloadable.
+let clientRoster = [];
 let cache = {}; // {mmKey: localStorage-shaped string}
 
 if (window._mmSupabaseInit) {
@@ -177,6 +181,12 @@ function boot() {
       // blocked by the showTab guard, but the buttons are visible). Rebuild
       // the bar now that the role is known, and land on the dashboard so
       // role-aware sections re-render with the right visibility.
+      // Hand the app its client roster (no longer baked into index.html).
+      // This also rebuilds the tab bar and re-renders the active tab, which
+      // covers the client-role case below for staff sessions too.
+      if (typeof window.mmApplyClientRoster === 'function') {
+        window.mmApplyClientRoster(clientRoster);
+      }
       if (window.mmUserRole === 'client') {
         if (typeof window.buildTabBar === 'function') window.buildTabBar();
         if (typeof window.showTab === 'function') window.showTab('dashboard');
@@ -244,7 +254,10 @@ async function hydrateAll() {
   ] = await Promise.all([
     supabase.from('user_kv').select('key, value').eq('user_id', currentUserId),
     supabase.from('agent_calls').select('agent_key, called, voicemail, comments').eq('org_id', currentOrgId),
-    supabase.from('clients').select('id, name, edits, deleted_at').eq('org_id', currentOrgId),
+    // Full roster columns: these used to be baked into index.html (and so
+    // were readable by anyone who fetched the page). They now load from
+    // here after login — see window.mmApplyClientRoster in index.html.
+    supabase.from('clients').select('id, name, edits, deleted_at, section, ba, referrer, budget, spec, locations, target, commission, exp, status, notes, date').eq('org_id', currentOrgId),
     supabase.from('saved_matches').select('client_id, property_address, suburb, price, property_type, note, saved_at'),
     supabase.from('dismissed_props').select('client_id, property_address, dismissed_at'),
     supabase.from('presented_props').select('client_id, property_address, presented_at, data'),
@@ -277,6 +290,26 @@ async function hydrateAll() {
   const clientNameById = {};
   const liveClients = (clientsRows.data || []).filter((r) => r.deleted_at === null);
   for (const r of liveClients) clientNameById[r.id] = r.name;
+
+  // Client roster for D.xlsxClients — replaces the array that used to be
+  // baked into index.html. Same field names the app already expects, so
+  // nothing downstream changes. Staff only: client-role sessions see just
+  // their own row (RLS) and don't render the roster views anyway.
+  clientRoster = liveClients.map((r) => ({
+    name:       r.name || '',
+    section:    r.section || '',
+    ba:         r.ba || '',
+    referrer:   r.referrer || '',
+    budget:     r.budget || '',
+    spec:       r.spec || '',
+    locations:  r.locations || '',
+    target:     r.target || '',
+    commission: r.commission == null ? '' : String(r.commission),
+    exp:        r.exp || '',
+    status:     r.status || '',
+    notes:      r.notes || '',
+    date:       r.date || '',
+  }));
 
   // mmClientEdits ← clients.edits (only non-empty)
   {
