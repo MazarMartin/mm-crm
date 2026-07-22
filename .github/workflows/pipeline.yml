@@ -98,6 +98,12 @@ jobs:
       - name: Run pipeline (scrape -> inject -> wash -> fill)
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # Domain sits behind Akamai and blocks 100% of requests from
+          # Actions runners. Scrapfly's ASP proxy is the only path that
+          # works; without this secret the scraper falls back to the local
+          # browser and returns zero listings (photos still come from the
+          # Proping emails, but baths/car/type/land go unfilled).
+          SCRAPFLY_API_KEY: ${{ secrets.SCRAPFLY_API_KEY }}
           PYTHONUTF8: '1'
           # Runner is UTC; scrape_gmail.py uses dt.astimezone() (the system local zone)
           # to stamp each email's date, so without this a 4:34 AM AEST email lands as

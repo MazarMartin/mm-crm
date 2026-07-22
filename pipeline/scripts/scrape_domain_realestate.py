@@ -24,11 +24,15 @@ Usage:
 
 import argparse
 import json
+import os
 import random
 import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -445,6 +449,69 @@ def _parse_dom_cards(page, sold):
 # denials per run and print a summary so the log makes the block obvious.
 _denied_pages = 0
 _ok_pages = 0
+_scrapfly_credits = 0   # running total so the log shows what a run costs
+
+
+def _get_scrapfly_key():
+    """Scrapfly API key from env or .mm_credentials. Empty string = disabled."""
+    key = os.environ.get('SCRAPFLY_API_KEY', '').strip()
+    if key:
+        return key
+    creds = SCRIPT_DIR / '.mm_credentials'
+    if creds.exists():
+        for line in creds.read_text(encoding='utf-8').splitlines():
+            if line.startswith('SCRAPFLY_API_KEY='):
+                return line.split('=', 1)[1].strip()
+    return ''
+
+
+def _fetch_via_scrapfly(url, api_key):
+    """Fetch a Domain page through Scrapfly's anti-bot proxy.
+
+    Domain sits behind Akamai, which denied every request from GitHub
+    Actions IPs — plain Playwright, Patchright drop-in, and Patchright's
+    full stealth mode (real Chrome + persistent context) were all blocked
+    100%. Scrapfly's ASP (Anti Scraping Protection) rotates residential
+    IPs and solves the challenge server-side.
+
+    asp=true is the whole point — without it this is just a proxy and
+    Akamai blocks it the same as everything else. country=au because
+    Domain serves/validates AU traffic. We don't ask for render_js: the
+    listing data lives in the __NEXT_DATA__ blob in the initial HTML, so
+    JS rendering would cost extra credits for nothing.
+
+    Returns the page HTML, or None on failure (caller falls back / counts
+    it as a denial).
+    """
+    global _scrapfly_credits
+    params = urllib.parse.urlencode({
+        'key': api_key,
+        'url': url,
+        'asp': 'true',
+        'country': 'au',
+        'retry': 'true',
+    })
+    req = urllib.request.Request(f'https://api.scrapfly.io/scrape?{params}')
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')[:200]
+        print(f'      ⚠ scrapfly HTTP {e.code}: {body}')
+        return None
+    except Exception as e:
+        print(f'      ⚠ scrapfly error: {e}')
+        return None
+
+    result = payload.get('result') or {}
+    cost = (payload.get('context') or {}).get('cost') or result.get('cost') or {}
+    if isinstance(cost, dict):
+        _scrapfly_credits += int(cost.get('total') or 0)
+    status = result.get('status_code')
+    if status and status != 200:
+        print(f'      ⚠ scrapfly upstream status {status}')
+    return result.get('content')
+
 
 def _is_access_denied(html):
     if not html:
@@ -456,8 +523,12 @@ def _is_access_denied(html):
     return False
 
 
-def scrape_suburb(context, slug, state, postcode, sold, max_pages):
-    """Scrape one suburb through N pages on Domain."""
+def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=''):
+    """Scrape one suburb through N pages on Domain.
+
+    When scrapfly_key is set every page is fetched through Scrapfly's ASP
+    proxy and `context` is unused (no browser is launched at all).
+    """
     global _denied_pages, _ok_pages
     results = []
     display = slug.replace('-', ' ').title()
@@ -476,34 +547,44 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages):
 
         print(f'    page {page_num}: {url[:90]}…')
 
-        page = context.new_page()
         got = []
+        page = None
         try:
-            page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            # Wait for listings to render (or the "no results" marker)
-            try:
-                page.wait_for_selector(
-                    '[data-testid="address-line1"], '
-                    '[data-testid="listing-card-wrapper-premiumplus"], '
-                    '[data-testid="listing-card-wrapper-standard"], '
-                    '[data-testid="listing-card-wrapper-elite"], '
-                    '[data-testid="error-page__main"]',
-                    timeout=12000
-                )
-            except PWTimeout:
-                pass
+            if scrapfly_key:
+                # Scrapfly path — no browser at all. Their ASP layer handles
+                # the Akamai challenge and returns the finished HTML.
+                html = _fetch_via_scrapfly(url, scrapfly_key)
+                if html is None:
+                    # Leave html as None: the _is_access_denied check below
+                    # counts it once. (Setting it to '' here double-counted.)
+                    html = None
+            else:
+                page = context.new_page()
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                # Wait for listings to render (or the "no results" marker)
+                try:
+                    page.wait_for_selector(
+                        '[data-testid="address-line1"], '
+                        '[data-testid="listing-card-wrapper-premiumplus"], '
+                        '[data-testid="listing-card-wrapper-standard"], '
+                        '[data-testid="listing-card-wrapper-elite"], '
+                        '[data-testid="error-page__main"]',
+                        timeout=12000
+                    )
+                except PWTimeout:
+                    pass
 
-            # Brief extra settle for __NEXT_DATA__
-            page.wait_for_timeout(1500)
+                # Brief extra settle for __NEXT_DATA__
+                page.wait_for_timeout(1500)
 
-            html = page.content()
+                html = page.content()
 
             # Detect the ~330-byte Akamai "Access Denied" response BEFORE we
             # bother parsing. When this fires there's no __NEXT_DATA__ to look
             # at — the parse would just silently produce zero listings.
             if _is_access_denied(html):
                 _denied_pages += 1
-                print(f'      🚫 ACCESS DENIED ({len(html)} bytes) — Domain is blocking this IP/UA')
+                print(f'      🚫 BLOCKED / no content ({len(html or "")} bytes)')
             else:
                 _ok_pages += 1
                 # Prefer structured JSON
@@ -516,8 +597,10 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages):
                                 rec['suburb'] = display
                             got.append(rec)
 
-                # DOM fallback
-                if not got:
+                # DOM fallback — only possible with a live Playwright page.
+                # On the Scrapfly path we rely on __NEXT_DATA__, which is
+                # present in the initial HTML Domain serves.
+                if not got and page is not None:
                     got = _parse_dom_cards(page, sold)
                     for r in got:
                         if not r.get('suburb'):
@@ -529,7 +612,8 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages):
             print(f'      ⚠ error: {e}')
         finally:
             try:
-                page.close()
+                if page is not None:
+                    page.close()
             except Exception:
                 pass
 
@@ -597,6 +681,8 @@ def main():
     ap.add_argument('--suburbs',     nargs='+')
     ap.add_argument('--no-merge',    action='store_true',
                     help="Overwrite existing cache instead of merging")
+    ap.add_argument('--no-scrapfly', action='store_true',
+                    help="Force the local-browser path even if a Scrapfly key is set")
     args = ap.parse_args()
 
     do_sold   = not args.listed_only
@@ -608,7 +694,9 @@ def main():
         suburbs = [row for row in LNS_SUBURBS if row[0] in wanted]
 
     print('=' * 60)
-    print(f'  Domain Scraper ({_DRIVER})')
+    scrapfly_key = '' if args.no_scrapfly else _get_scrapfly_key()
+    fetcher = 'scrapfly (ASP)' if scrapfly_key else f'local browser ({_DRIVER})'
+    print(f'  Domain Scraper — via {fetcher}')
     print(f'  {datetime.now().strftime("%A %d %B %Y  %H:%M")}')
     print(f'  {len(suburbs)} suburbs × {args.pages} pages')
     print(f'  listed={do_listed}  sold={do_sold}')
@@ -617,6 +705,38 @@ def main():
     all_listed = []
     all_sold   = []
 
+    def run_suburbs(context):
+        """Walk every suburb. `context` is None on the Scrapfly path."""
+        for slug, state, postcode in suburbs:
+            print(f'\n▶ {slug.replace("-", " ").title()}')
+            if do_listed:
+                print('  ── For Sale ──')
+                props = scrape_suburb(context, slug, state, postcode,
+                                      sold=False, max_pages=args.pages,
+                                      scrapfly_key=scrapfly_key)
+                print(f'    total for sale: {len(props)}')
+                all_listed.extend(props)
+            if do_sold:
+                print('  ── Sold ──')
+                props = scrape_suburb(context, slug, state, postcode,
+                                      sold=True, max_pages=args.pages,
+                                      scrapfly_key=scrapfly_key)
+                print(f'    total sold: {len(props)}')
+                all_sold.extend(props)
+
+    if scrapfly_key:
+        # No browser needed at all — Scrapfly returns finished HTML.
+        run_suburbs(None)
+    else:
+        _run_with_browser(run_suburbs)
+
+    _finish(all_listed, all_sold, args, do_listed, do_sold)
+
+
+def _run_with_browser(run_suburbs):
+    """Legacy local-browser path (Patchright / Playwright). Retained as a
+    fallback for dev machines and in case Scrapfly is ever unavailable —
+    but Domain's Akamai currently denies 100% of requests through it."""
     with sync_playwright() as pw:
         if _DRIVER == 'patchright':
             # Patchright's recommended full-stealth mode: persistent context
@@ -657,20 +777,7 @@ def main():
             )
 
         try:
-            for slug, state, postcode in suburbs:
-                print(f'\n▶ {slug.replace("-", " ").title()}')
-                if do_listed:
-                    print('  ── For Sale ──')
-                    props = scrape_suburb(context, slug, state, postcode,
-                                          sold=False, max_pages=args.pages)
-                    print(f'    total for sale: {len(props)}')
-                    all_listed.extend(props)
-                if do_sold:
-                    print('  ── Sold ──')
-                    props = scrape_suburb(context, slug, state, postcode,
-                                          sold=True, max_pages=args.pages)
-                    print(f'    total sold: {len(props)}')
-                    all_sold.extend(props)
+            run_suburbs(context)
         finally:
             try:
                 context.close()
@@ -679,6 +786,9 @@ def main():
             except Exception:
                 pass
 
+
+def _finish(all_listed, all_sold, args, do_listed, do_sold):
+    """Dedupe, report, and write the three output files."""
     all_listed = dedupe(all_listed, sold=False)
     all_sold   = dedupe(all_sold, sold=True)
 
@@ -687,6 +797,10 @@ def main():
     if total_pages:
         print(f'  Pages: {_ok_pages} ok, {_denied_pages} denied '
               f'({_denied_pages*100//total_pages}% blocked)')
+    if _scrapfly_credits:
+        # ~30 days of this figure is the monthly credit burn — worth
+        # watching against the plan's allowance.
+        print(f'  Scrapfly credits used this run: {_scrapfly_credits:,}')
     print(f'  New for-sale: {len(all_listed)}')
     print(f'  New sold    : {len(all_sold)}')
 
