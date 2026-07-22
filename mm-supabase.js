@@ -47,6 +47,7 @@ const RELATIONAL_KEYS = new Set([
   'mmSavedMatches',
   'mmDismissedProps',
   'mmPresented',
+  'mmClientResponses',
   'mmClientComments',
   'mmClientActivity',
   'mmPropComments',
@@ -227,6 +228,7 @@ async function hydrateAll() {
     propComments,
     manualListings, // currently unused — manual_listings tables stay empty until we migrate mmNewSale/Off proper
     listingEdits,
+    presentedResponses,
   ] = await Promise.all([
     supabase.from('user_kv').select('key, value').eq('user_id', currentUserId),
     supabase.from('agent_calls').select('agent_key, called, voicemail, comments').eq('org_id', currentOrgId),
@@ -239,10 +241,11 @@ async function hydrateAll() {
     supabase.from('property_comments').select('property_address, body, created_at').eq('org_id', currentOrgId),
     supabase.from('manual_listings').select('*').eq('org_id', currentOrgId),
     supabase.from('listing_edits').select('property_address, listing_type, edits, is_deleted, is_blacklisted').eq('org_id', currentOrgId),
+    supabase.from('presented_responses').select('client_id, property_address, response, note, responded_at'),
   ]);
 
   // Throw on any of them
-  for (const r of [kv, calls, clientsRows, savedMatches, dismissed, presented, cliComments, cliActivity, propComments, manualListings, listingEdits]) {
+  for (const r of [kv, calls, clientsRows, savedMatches, dismissed, presented, cliComments, cliActivity, propComments, manualListings, listingEdits, presentedResponses]) {
     if (r.error) throw r.error;
   }
 
@@ -331,6 +334,26 @@ async function hydrateAll() {
       return d;
     });
     if (Object.keys(obj).length > 0) c['mmPresented'] = JSON.stringify(obj);
+  }
+
+  // mmClientResponses — client swipe reactions to presented properties.
+  // Object-of-objects keyed by normalized address (not an array): the write
+  // adapter upserts per (client, address), and clients have no DELETE right.
+  {
+    const obj = {};
+    for (const r of (presentedResponses.data || [])) {
+      const name = clientNameById[r.client_id];
+      if (!name) continue;
+      const addrKey = (r.property_address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!addrKey) continue;
+      (obj[name] = obj[name] || {})[addrKey] = {
+        address: r.property_address,
+        response: r.response,
+        note: r.note || '',
+        ts: r.responded_at ? Date.parse(r.responded_at) : 0,
+      };
+    }
+    if (Object.keys(obj).length > 0) c['mmClientResponses'] = JSON.stringify(obj);
   }
 
   // mmClientComments
@@ -611,6 +634,40 @@ const RELATIONAL_ADAPTERS = {
           };
         },
       });
+    },
+    remove: async () => {},
+  },
+
+  mmClientResponses: {
+    // Upsert-based, deliberately NOT replaceClientChildRows: clients have no
+    // DELETE right on presented_responses (RLS, migration 0004), and replace
+    // semantics would try one. Diff old vs new and upsert only what changed —
+    // the unique (client_id, property_address) key makes re-answers updates.
+    write: async (newStr, oldStr) => {
+      const newV = parseObj(newStr);
+      const oldV = parseObj(oldStr);
+      for (const [name, respMap] of Object.entries(newV)) {
+        if (!respMap || typeof respMap !== 'object') continue;
+        const oldMap = (oldV && oldV[name]) || {};
+        const changed = Object.entries(respMap).filter(([k, v]) =>
+          JSON.stringify(v) !== JSON.stringify(oldMap[k]));
+        if (!changed.length) continue;
+        // create=false: a response can only attach to an existing client row;
+        // client-role sessions couldn't insert into clients anyway.
+        const clientId = await resolveClientId(name, false);
+        if (!clientId) continue;
+        const rows = changed.map(([, v]) => ({
+          client_id: clientId,
+          property_address: (v && v.address) || '',
+          response: (v && v.response) || 'passed',
+          note: (v && v.note) || '',
+          responded_at: v && v.ts ? new Date(v.ts).toISOString() : new Date().toISOString(),
+        })).filter((r) => r.property_address);
+        if (!rows.length) continue;
+        const { error } = await supabase.from('presented_responses')
+          .upsert(rows, { onConflict: 'client_id,property_address' });
+        if (error) throw error;
+      }
     },
     remove: async () => {},
   },

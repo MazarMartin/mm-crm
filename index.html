@@ -32840,6 +32840,223 @@ function buildClientsTab() {
 // Client-role view of the Clients tab. Renders "my file" — their own
 // preferences (so they can sanity-check them) plus properties Gerard has
 // presented to them (mmPresented[clientName]). Nothing else.
+// ─── Client swipe responses on presented properties ─────────────────────
+// A response ANNOTATES a presented property — it never removes it. Staff
+// keep seeing every presented item under the client's name, now stamped
+// with the client's reaction. Stored in mmClientResponses, keyed by
+// client name → normalized address, synced to presented_responses.
+
+function _clRespKey(address) {
+  return (address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function _clGetResponses(clientName) {
+  return (lsGet('mmClientResponses', {})[clientName]) || {};
+}
+
+// Tiny 👍n 👎n badge for the Active Buyers table so staff can spot new
+// client reactions without opening each profile. Renders nothing when the
+// client hasn't responded to anything.
+function _clResponseCountsHTML(clientName) {
+  const r = _clGetResponses(clientName);
+  let yes = 0, no = 0;
+  for (const v of Object.values(r)) {
+    if (v && v.response === 'interested') yes++;
+    else if (v) no++;
+  }
+  if (!yes && !no) return '';
+  const pill = (txt, bg, fg) =>
+    `<span style="background:${bg};color:${fg};font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:3px">${txt}</span>`;
+  return '<span style="white-space:nowrap">'
+    + (yes ? pill('👍' + yes, '#E8F5E9', '#2E7D32') : '')
+    + (no  ? pill('👎' + no,  '#FFEBEE', '#C62828') : '')
+    + '</span>';
+}
+
+// Presented items were historically written as bare address strings by an
+// older swipe path. Coerce to a minimal object so downstream reads of
+// .beds / .heroPhoto etc. don't blow up.
+function _clNormPresented(rawP) {
+  return typeof rawP === 'string' ? { address: rawP } : (rawP || {});
+}
+
+// Shared bits for a presented-property card: formatted date, the "suburb ·
+// type · N bed · N bath · price" line, and the photo band.
+function _clCardParts(p) {
+  const pDate = p.presentedDate ||
+                (p.presentedTs ? new Date(p.presentedTs).toLocaleDateString('en-AU') : '') ||
+                p.date || '';
+  const price = p.price ? ' · ' + _swEsc(p.price) : '';
+  const hasMeta = !!(p.suburb || p.type || p.beds || p.baths || p.price);
+  const bedText  = p.beds  ? _swEsc(p.beds)  + ' bed'  : '';
+  const bathText = p.baths ? _swEsc(p.baths) + ' bath' : '';
+  const parts = [p.suburb, p.type, bedText, bathText].map(x => _swEsc(x || '')).filter(Boolean);
+  const metaLine = parts.join(' · ') + price;
+  const photo = p.heroPhoto || _mmLookupHeroPhoto(p.address || '');
+  // Single-quote the CSS url(): the style attribute is double-quoted, so a
+  // double-quoted URL closes it early and the browser loses the image.
+  const photoHtml = photo
+    ? `<div style="aspect-ratio:16/10;background:#e8e4db url('${String(photo).replace(/'/g, '%27')}') center/cover no-repeat"></div>`
+    : '';
+  return { pDate, metaLine, hasMeta, photoHtml };
+}
+
+// Persist a client's reaction. Read-modify-write on the managed key — the
+// localStorage interception in mm-supabase.js syncs it to Supabase.
+function _clSaveResponse(clientName, address, response, note) {
+  const all = lsGet('mmClientResponses', {});
+  if (!all[clientName]) all[clientName] = {};
+  const key = _clRespKey(address);
+  if (!key) return;
+  all[clientName][key] = {
+    address: address,
+    response: response,          // 'interested' | 'passed'
+    note: (note || '').trim(),
+    ts: Date.now(),
+  };
+  lsSet('mmClientResponses', all);
+}
+
+// Change a previously-given answer from the "Your responses" list. Keeps
+// any note the client already left.
+function _clChangeResponse(clientName, address, response) {
+  const existing = _clGetResponses(clientName)[_clRespKey(address)] || {};
+  _clSaveResponse(clientName, address, response, existing.note || '');
+  showToast(response === 'interested' ? 'Marked as interested' : 'Marked as passed');
+  buildClientsTab();
+}
+
+// Client-facing swipe deck. Deliberately a separate, simpler implementation
+// from the staff deck (_swRenderDeck): that one owns its own queue, filters
+// by client brief, and writes mmPresented/mmDismissedProps. This one just
+// walks a fixed list of already-presented properties and records a reaction.
+// Shares the .sw-* CSS so the two feel like the same product.
+function _clRenderResponseDeck(clientName, items, rootEl) {
+  let queue = items.slice().reverse();   // newest presented first
+
+  rootEl.innerHTML = `
+    <div class="sw-deck-wrap">
+      <div class="sw-deck-head">
+        <div class="sw-count">To review</div>
+        <div><span class="sw-remain" data-role="remain">${queue.length}</span>
+          <span style="font-size:11px;color:var(--text-light);text-transform:uppercase;letter-spacing:.5px;font-weight:600">left</span></div>
+      </div>
+      <div class="sw-legend">
+        <div class="l">← Pass</div>
+        <div class="arrow">swipe or tap</div>
+        <div class="r">Interested →</div>
+      </div>
+      <div class="sw-controls">
+        <button class="sw-btn pass" data-role="pass">← Pass</button>
+        <button class="sw-btn present" data-role="present">Interested →</button>
+      </div>
+      <div class="sw-stack" data-role="stack"></div>
+    </div>`;
+
+  const stack     = rootEl.querySelector('[data-role="stack"]');
+  const remainEl  = rootEl.querySelector('[data-role="remain"]');
+  const passBtn   = rootEl.querySelector('[data-role="pass"]');
+  const yesBtn    = rootEl.querySelector('[data-role="present"]');
+
+  let activeCard = null, startX = 0, currentX = 0, dragging = false;
+
+  function cardHTML(p) {
+    const { pDate, metaLine, hasMeta, photoHtml } = _clCardParts(p);
+    return `
+      <div class="sw-photo${photoHtml ? '' : ' loading'}" style="${photoHtml ? '' : 'background:#e8e4db'}">
+        ${photoHtml ? `<div style="position:absolute;inset:0;background:#e8e4db url('${String(p.heroPhoto || _mmLookupHeroPhoto(p.address || '')).replace(/'/g, '%27')}') center/cover no-repeat"></div>` : ''}
+        <div class="sw-price" style="position:relative">${_swEsc(p.price || '')}</div>
+        <div class="sw-overlay present">Interested</div>
+        <div class="sw-overlay pass">Pass</div>
+      </div>
+      <div class="sw-body">
+        <div class="sw-addr">${_swEsc(p.address || '')}</div>
+        ${hasMeta || pDate ? `<div class="sw-sub">${metaLine}${hasMeta && pDate ? ' · ' : ''}${pDate ? 'Presented ' + _swEsc(pDate) : ''}</div>` : ''}
+        <div class="sw-comment">
+          <div class="sw-comment-lbl">Anything you'd like to tell your agent about this one?</div>
+          <textarea class="sw-comment-input" placeholder="Optional — e.g. kitchen looks small, love the aspect…" rows="2"></textarea>
+        </div>
+      </div>`;
+  }
+
+  function renderStack() {
+    stack.innerHTML = '';
+    remainEl.textContent = queue.length;
+    if (!queue.length) {
+      stack.innerHTML = '<div class="sw-empty">🎉 All done — thanks! Your agent can see your responses.</div>';
+      passBtn.disabled = true; yesBtn.disabled = true;
+      // Re-render so answered items move into "Your Responses".
+      setTimeout(() => buildClientsTab(), 900);
+      return;
+    }
+    passBtn.disabled = false; yesBtn.disabled = false;
+    queue.slice(0, 4).forEach((p, i) => {
+      const card = document.createElement('div');
+      card.className = 'sw-card';
+      card.dataset.depth = String(i);
+      card.innerHTML = cardHTML(p);
+      stack.appendChild(card);
+    });
+    attachGestures();
+  }
+
+  function commit(dir) {
+    if (!activeCard) return;
+    const noteEl = activeCard.querySelector('.sw-comment-input');
+    const note = noteEl ? noteEl.value : '';
+    const item = queue[0];
+    activeCard.classList.add('gone');
+    const x = dir === 'right' ? window.innerWidth : -window.innerWidth;
+    activeCard.style.transform = `translateX(${x}px) rotate(${dir === 'right' ? 20 : -20}deg)`;
+    activeCard.style.opacity = '0';
+    queue.shift();
+    if (item) {
+      _clSaveResponse(clientName, item.address, dir === 'right' ? 'interested' : 'passed', note);
+    }
+    setTimeout(renderStack, 220);
+  }
+
+  function attachGestures() {
+    const top = stack.querySelector('.sw-card[data-depth="0"]');
+    if (!top) return;
+    activeCard = top;
+    const onStart = (x) => { dragging = true; startX = x; currentX = 0; top.classList.add('dragging'); };
+    const onMove = (x) => {
+      if (!dragging || !activeCard) return;
+      currentX = x - startX;
+      activeCard.style.transform = `translateX(${currentX}px) rotate(${currentX / 25}deg)`;
+      const y = activeCard.querySelector('.sw-overlay.present');
+      const n = activeCard.querySelector('.sw-overlay.pass');
+      if (currentX > 20)       { y.style.opacity = Math.min(1, currentX / 120);  n.style.opacity = 0; }
+      else if (currentX < -20) { n.style.opacity = Math.min(1, -currentX / 120); y.style.opacity = 0; }
+      else                     { y.style.opacity = 0; n.style.opacity = 0; }
+    };
+    const onEnd = () => {
+      if (!dragging || !activeCard) return;
+      dragging = false;
+      activeCard.classList.remove('dragging');
+      if (currentX > 120)       commit('right');
+      else if (currentX < -120) commit('left');
+      else {
+        activeCard.style.transform = '';
+        activeCard.querySelector('.sw-overlay.present').style.opacity = 0;
+        activeCard.querySelector('.sw-overlay.pass').style.opacity = 0;
+      }
+    };
+    top.ontouchstart = e => onStart(e.touches[0].clientX);
+    top.ontouchmove  = e => onMove(e.touches[0].clientX);
+    top.ontouchend   = onEnd;
+    top.onmousedown  = e => { onStart(e.clientX); e.preventDefault(); };
+    // Scoped by the `dragging` flag so these don't fight other UI.
+    window.addEventListener('mousemove', e => { if (dragging) onMove(e.clientX); });
+    window.addEventListener('mouseup', onEnd);
+  }
+
+  passBtn.onclick = () => commit('left');
+  yesBtn.onclick  = () => commit('right');
+  renderStack();
+}
+
 function buildClientOwnProfileView(el, edits) {
   const clientName = window.mmUserClient || '';
   if (!clientName) {
@@ -32866,6 +33083,15 @@ function buildClientOwnProfileView(el, edits) {
   const spec      = merged.spec || '';
 
   const presented = (lsGet('mmPresented', {})[clientName] || []);
+
+  // Split presented properties into ones still awaiting the client's swipe
+  // and ones they've already answered. Responses annotate, never remove —
+  // so `presented` stays the full list and this is purely a view split.
+  const _clResponses = _clGetResponses(clientName);
+  const _clNormalized = presented.map(_clNormPresented);
+  const _clPending   = _clNormalized.filter(p => !_clResponses[_clRespKey(p.address)]);
+  const _clResponded = _clNormalized.filter(p =>  _clResponses[_clRespKey(p.address)]);
+  const _clEName = clientName.replace(/'/g, "\\'");
 
   el.innerHTML = `
     <div class="page-title">My File</div>
@@ -32901,61 +33127,66 @@ function buildClientOwnProfileView(el, edits) {
       </div>
     </div>
 
+    <!-- To review — properties awaiting the client's swipe -->
     <div class="cl-section" style="border-left:4px solid #1565C0;margin-top:16px">
-      <h4>Properties Presented to You <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${presented.length}</span></h4>
-      ${presented.length ? `
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:14px">
-          ${presented.slice().reverse().map(rawP => {
-            // Older versions of the swipe/present flow wrote bare address
-            // strings into mmPresented instead of objects. Coerce those to
-            // a minimal object so the render doesn't blow up on p.address
-            // / p.beds / etc.
-            const p = typeof rawP === 'string' ? { address: rawP } : rawP;
-            // Presented items save the date as `presentedDate` (already a
-            // formatted string like "10 Jul 2026") and `presentedTs` (ms).
-            // Older records may only have `date` — fall through the options.
-            const pDate = p.presentedDate ||
-                          (p.presentedTs ? new Date(p.presentedTs).toLocaleDateString('en-AU') : '') ||
-                          p.date || '';
-            const price = p.price ? ' · ' + _swEsc(p.price) : '';
-            // Only render the metadata row if we have SOMETHING to show —
-            // otherwise a legacy string-only entry becomes " ·  · ? bed …"
-            const hasMeta = p.suburb || p.type || p.beds || p.baths || p.price;
-            const bedText  = p.beds  ? _swEsc(p.beds)  + ' bed'  : '';
-            const bathText = p.baths ? _swEsc(p.baths) + ' bath' : '';
-            const parts = [p.suburb, p.type, bedText, bathText].map(x => _swEsc(x || '')).filter(Boolean);
-            const metaLine = parts.join(' · ') + (price ? (parts.length ? '' : '') + price : '');
-            // Photo: use the stored heroPhoto for items presented after the
-            // fix, or dynamically look up from current listings so items
-            // stored before this change also render with photos.
-            const photo = p.heroPhoto || _mmLookupHeroPhoto(p.address || '');
-            // Single quotes around the URL — the enclosing style attribute
-            // uses double quotes, so wrapping with JSON.stringify (which
-            // produces double quotes) breaks the parse and the browser
-            // sees the URL as a stray attribute. Percent-encode any stray
-            // single quotes in the URL for safety.
-            const photoHtml = photo
-              ? `<div style="aspect-ratio:16/10;background:#e8e4db url('${String(photo).replace(/'/g, '%27')}') center/cover no-repeat;border-radius:8px 8px 0 0"></div>`
-              : '';
-            return `
-            <div style="background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px;overflow:hidden">
-              ${photoHtml}
-              <div style="padding:12px 14px">
-                <div style="font-weight:600;color:#1C3A2A;font-size:14px">${_swEsc(p.address || '')}</div>
-                ${hasMeta || pDate ? `<div style="font-size:12px;color:var(--text-mid);margin-top:4px">
-                  ${metaLine}${hasMeta && pDate ? ' · ' : ''}${pDate ? `<span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
-                </div>` : ''}
-              </div>
-            </div>`;
-          }).join('')}
+      <h4>To Review <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${_clPending.length}</span></h4>
+      ${_clPending.length ? `
+        <div style="font-size:12px;color:var(--text-mid);margin:6px 0 4px;line-height:1.5">
+          Swipe or tap to let your buyer's agent know what you think. Add a note if you'd like — it goes straight to them.
         </div>
+        <div id="cl-response-deck"></div>
       ` : `
         <div class="empty-state" style="padding:24px;margin-top:10px">
-          No properties presented yet. When your buyer's agent finds something worth showing, it'll appear here.
+          ${presented.length
+            ? "Nothing new to review right now — you've responded to everything below."
+            : "No properties presented yet. When your buyer's agent finds something worth showing, it'll appear here."}
         </div>
       `}
     </div>
+
+    <!-- Your responses — everything already swiped, answer changeable -->
+    ${_clResponded.length ? `
+    <div class="cl-section" style="border-left:4px solid var(--green);margin-top:16px">
+      <h4>Your Responses <span style="font-weight:400;color:var(--text-mid);font-size:13px">— ${_clResponded.length}</span></h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:14px">
+        ${_clResponded.slice().reverse().map(p => {
+          const { pDate, metaLine, hasMeta, photoHtml } = _clCardParts(p);
+          const r = _clResponses[_clRespKey(p.address)] || {};
+          const yes = r.response === 'interested';
+          const badge = yes
+            ? '<span style="background:#E8F5E9;color:#2E7D32;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px">👍 Interested</span>'
+            : '<span style="background:#FFEBEE;color:#C62828;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px">👎 Passed</span>';
+          const eAddr = (p.address || '').replace(/'/g, "\\'");
+          return `
+          <div style="background:#F5F9FC;border:1px solid #D6E3EC;border-radius:8px;overflow:hidden">
+            ${photoHtml}
+            <div style="padding:12px 14px">
+              <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+                <div style="font-weight:600;color:#1C3A2A;font-size:14px;flex:1">${_swEsc(p.address || '')}</div>
+                ${badge}
+              </div>
+              ${hasMeta || pDate ? `<div style="font-size:12px;color:var(--text-mid);margin-top:4px">
+                ${metaLine}${hasMeta && pDate ? ' · ' : ''}${pDate ? `<span style="color:var(--text-light)">Presented ${_swEsc(pDate)}</span>` : ''}
+              </div>` : ''}
+              ${r.note ? `<div style="font-size:12px;color:var(--text-mid);margin-top:8px;padding:8px 10px;background:#fff;border:1px solid var(--border-light);border-radius:6px;font-style:italic">“${_swEsc(r.note)}”</div>` : ''}
+              <div style="margin-top:10px;display:flex;gap:6px">
+                <button class="btn-sm" style="flex:1;background:${yes ? '#E8F5E9' : '#fff'};color:#2E7D32;border:1px solid ${yes ? '#2E7D32' : 'var(--border-light)'};border-radius:var(--r-pill);font-size:11px;font-weight:600;cursor:pointer;padding:5px"
+                  onclick="_clChangeResponse('${_clEName}','${eAddr}','interested')">👍 Interested</button>
+                <button class="btn-sm" style="flex:1;background:${yes ? '#fff' : '#FFEBEE'};color:#C62828;border:1px solid ${yes ? 'var(--border-light)' : '#C62828'};border-radius:var(--r-pill);font-size:11px;font-weight:600;cursor:pointer;padding:5px"
+                  onclick="_clChangeResponse('${_clEName}','${eAddr}','passed')">👎 Pass</button>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
   `;
+
+  // Mount the swipe deck after the markup is in the DOM.
+  if (_clPending.length) {
+    const deckMount = el.querySelector('#cl-response-deck');
+    if (deckMount) _clRenderResponseDeck(clientName, _clPending, deckMount);
+  }
 }
 
 function moveToSettlements(name) {
@@ -33191,7 +33422,7 @@ function buildActiveBuyersSection(edits) {
         </div>
       </td>
       <td>${e.ba||c.ba||'—'}</td>
-      <td style="font-weight:600"><a class="client-name-link" onclick="openClientProfile('${eName}')">${name}</a></td>
+      <td style="font-weight:600"><a class="client-name-link" onclick="openClientProfile('${eName}')">${name}</a>${_clResponseCountsHTML(name)}</td>
       <td style="max-width:180px">${(merged.locations||'—').split(/[,;]+/).map(s=>s.trim()).filter(Boolean).map(s=>`<span class="suburb-pill" style="margin:1px">${s}</span>`).join(' ') || '—'}</td>
       <td style="font-size:11px">${typePref}</td>
       <td style="text-align:center">${bedPref}</td>
@@ -34128,6 +34359,18 @@ function openClientProfile(clientName) {
             if (!storedDetails.has(fdet)) auto.push({ id:'auto_f_'+((p.presentedTs||0)), type:'feedback', detail: fdet, ts: (p.presentedTs||0)+1, date: p.presentedDate||'', _auto:true });
           }
         });
+        // Auto-generate from client swipe responses (mmClientResponses)
+        Object.values(_clGetResponses(clientName)).forEach(r => {
+          if (!r || !r.address) return;
+          const verb = r.response === 'interested' ? '👍 Client interested in' : '👎 Client passed on';
+          const rdet = verb + ' — ' + r.address + (r.note ? ': "' + r.note + '"' : '');
+          if (!storedDetails.has(rdet)) {
+            auto.push({ id:'auto_r_'+_clRespKey(r.address), type:'response', detail: rdet,
+                        ts: r.ts||0,
+                        date: r.ts ? new Date(r.ts).toLocaleDateString('en-AU',{day:'2-digit',month:'short',year:'numeric'}) : '',
+                        _auto:true });
+          }
+        });
         // Auto-generate: current matches summary
         if (allMatches.length) {
           const matchAddrs = allMatches.slice(0,3).map(m => m.address||'').filter(Boolean);
@@ -34326,16 +34569,29 @@ async function sendClientInvite(btn, clientName) {
 function _buildPresentedSectionHTML(clientName) {
   const presented = lsGet('mmPresented', {})[clientName] || [];
   const _eName = clientName.replace(/'/g, "\\'");
+  // Client swipe reactions, keyed by normalized address (see migration 0004).
+  const _resp = _clGetResponses(clientName);
   return `<div class="cl-section" id="mm-presented-section" style="border-left:4px solid var(--green)">
         <h4>Presented — ${presented.length} properties</h4>
         ${presented.length ? presented.map(p => {
             const pDate = p.presentedDate || '';
             const feedbackVal = p.feedback || '';
+            const r = _resp[_clRespKey(p.address || '')];
+            const rDate = r && r.ts ? new Date(r.ts).toLocaleDateString('en-AU') : '';
+            const respHtml = r
+              ? `<div style="margin-top:6px;font-size:11px">
+                   <span style="font-weight:700;color:${r.response === 'interested' ? '#2E7D32' : '#C62828'}">
+                     ${r.response === 'interested' ? '👍 Client interested' : '👎 Client passed'}
+                   </span>${rDate ? `<span style="color:var(--text-light)"> · ${rDate}</span>` : ''}
+                   ${r.note ? `<div style="margin-top:4px;color:var(--text-mid);font-style:italic">“${_swEsc(r.note)}”</div>` : ''}
+                 </div>`
+              : `<div style="margin-top:6px;font-size:11px;color:var(--text-light)">⏳ Awaiting client response</div>`;
             return `<div style="padding:12px 16px;background:var(--surface-warm);border:1px solid var(--border-light);border-radius:var(--r-sm);margin-bottom:8px">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
                 <span style="font-weight:600;font-size:13px;color:var(--text)">${p.address||''}</span>
                 <span style="font-weight:700;color:var(--green);font-size:14px">${p.price||'—'}</span>
               </div>
+              ${respHtml}
               <div style="font-size:11px;color:var(--text-mid)">${p.suburb||''} · ${p.type||''} · ${p.beds||'?'} bed · ${p.baths||'?'} bath · Presented ${pDate}</div>
               <div style="display:flex;gap:6px;align-items:start;margin-top:8px">
                 <textarea placeholder="Feedback..." style="flex:1;border:1px solid var(--border);border-radius:var(--r-sm);padding:6px 10px;font-size:11px;font-family:var(--ff-ui);resize:vertical;min-height:36px" onblur="savePresentedFeedback('${_eName}','${(p.address||'').replace(/'/g,"\\'")}',this.value)">${feedbackVal}</textarea>
