@@ -450,6 +450,9 @@ def _parse_dom_cards(page, sold):
 _denied_pages = 0
 _ok_pages = 0
 _scrapfly_credits = 0   # running total so the log shows what a run costs
+# Observed cost of one Domain listing page through Scrapfly ASP:
+# 25 credits residential proxy + 5 browser usage. Used for preflight sizing.
+CREDITS_PER_PAGE = 30
 
 
 def _get_scrapfly_key():
@@ -463,6 +466,44 @@ def _get_scrapfly_key():
             if line.startswith('SCRAPFLY_API_KEY='):
                 return line.split('=', 1)[1].strip()
     return ''
+
+
+def _scrapfly_preflight(api_key, pages_planned):
+    """Check the account has enough credits before starting a run.
+
+    A run that exhausts its credits partway through leaves a half-filled
+    cache and looks identical to a scraping failure — the exact silent
+    ambiguity that made the original Akamai block take a week to spot.
+    Better to refuse up front and say why. Returns True to proceed.
+    """
+    try:
+        with urllib.request.urlopen(
+                f'https://api.scrapfly.io/account?key={api_key}', timeout=30) as r:
+            acct = json.loads(r.read().decode('utf-8'))
+    except Exception as e:
+        print(f'  ⚠ could not check Scrapfly balance ({e}) — proceeding anyway')
+        return True
+
+    sub  = acct.get('subscription') or {}
+    scr  = ((sub.get('usage') or {}).get('scrape') or {})
+    left = scr.get('remaining')
+    plan = sub.get('plan_name', '?')
+    if left is None:
+        return True
+
+    need = pages_planned * CREDITS_PER_PAGE
+    print(f'  Scrapfly plan: {plan} — {left:,} credits remaining, '
+          f'~{need:,} needed for this run')
+    if left < need:
+        print('=' * 60)
+        print(f'  ✋ NOT ENOUGH SCRAPFLY CREDITS — refusing to start.')
+        print(f'     Need ~{need:,}, have {left:,}. A partial run would')
+        print(f'     leave a half-filled cache that looks like a scrape')
+        print(f'     failure. Top up the plan, or narrow the run with')
+        print(f'     --suburbs / --pages, or use --no-scrapfly.')
+        print('=' * 60)
+        return False
+    return True
 
 
 def _fetch_via_scrapfly(url, api_key):
@@ -725,6 +766,10 @@ def main():
                 all_sold.extend(props)
 
     if scrapfly_key:
+        # Sized on the worst case: every suburb, every page, both feeds.
+        planned = len(suburbs) * args.pages * ((1 if do_listed else 0) + (1 if do_sold else 0))
+        if not _scrapfly_preflight(scrapfly_key, planned):
+            sys.exit(2)
         # No browser needed at all — Scrapfly returns finished HTML.
         run_suburbs(None)
     else:
