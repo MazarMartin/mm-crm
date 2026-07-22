@@ -22,11 +22,22 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_aJddeid2D0-0kDWclrNRgQ_nt_kQih5
 
 // Keys that map 1:1 to a user_kv row (string in, string out). Adding a new
 // per-user blob is just appending to this set — no per-key code required.
+// Genuinely per-person UI state. Safe to differ between Gerard, Mon and
+// Jeremy — nobody is harmed if their dismissed-news list or which week
+// they're viewing doesn't match.
 const USER_KV_KEYS = new Set([
   'mmCommissionUnlocked',
-  'mmStatOverrides',
   'mmWeek',
   'mm_news_dismissed',
+]);
+
+// Shared business data — must be identical for every staff member. These
+// lived in user_kv while everyone shared one login, which hid the problem;
+// with individual staff accounts they'd silently diverge (Gerard marks a
+// buyer HOT and Mon still sees Warm; Gerard adds an off-market and nobody
+// else can see it). Stored org-wide in org_kv (migration 0005).
+const ORG_KV_KEYS = new Set([
+  'mmStatOverrides',
   'mmAutoMatches',
   'mmAutoMatchLastRun',
   'mmAutoMatchTs',
@@ -57,7 +68,7 @@ const RELATIONAL_KEYS = new Set([
   'mmDeletedFS',
 ]);
 
-const MANAGED_KEYS = new Set([...USER_KV_KEYS, ...RELATIONAL_KEYS]);
+const MANAGED_KEYS = new Set([...USER_KV_KEYS, ...ORG_KV_KEYS, ...RELATIONAL_KEYS]);
 
 // Module state
 let supabase = null;
@@ -229,6 +240,7 @@ async function hydrateAll() {
     manualListings, // currently unused — manual_listings tables stay empty until we migrate mmNewSale/Off proper
     listingEdits,
     presentedResponses,
+    orgKv,
   ] = await Promise.all([
     supabase.from('user_kv').select('key, value').eq('user_id', currentUserId),
     supabase.from('agent_calls').select('agent_key, called, voicemail, comments').eq('org_id', currentOrgId),
@@ -242,15 +254,22 @@ async function hydrateAll() {
     supabase.from('manual_listings').select('*').eq('org_id', currentOrgId),
     supabase.from('listing_edits').select('property_address, listing_type, edits, is_deleted, is_blacklisted').eq('org_id', currentOrgId),
     supabase.from('presented_responses').select('client_id, property_address, response, note, responded_at'),
+    supabase.from('org_kv').select('key, value').eq('org_id', currentOrgId),
   ]);
 
   // Throw on any of them
-  for (const r of [kv, calls, clientsRows, savedMatches, dismissed, presented, cliComments, cliActivity, propComments, manualListings, listingEdits, presentedResponses]) {
+  for (const r of [kv, calls, clientsRows, savedMatches, dismissed, presented, cliComments, cliActivity, propComments, manualListings, listingEdits, presentedResponses, orgKv]) {
     if (r.error) throw r.error;
   }
 
-  // user_kv (covers all USER_KV_KEYS in one go)
+  // user_kv (per-person UI state) then org_kv (shared business data).
+  // org_kv is applied second so it wins if a stale per-user row for a
+  // now-org-scoped key is still sitting in user_kv from before migration
+  // 0005 — the org value is the authoritative one.
   for (const row of kv.data || []) {
+    c[row.key] = typeof row.value === 'string' ? row.value : JSON.stringify(row.value);
+  }
+  for (const row of orgKv.data || []) {
     c[row.key] = typeof row.value === 'string' ? row.value : JSON.stringify(row.value);
   }
 
@@ -464,6 +483,22 @@ async function userKvUpsert(key, value) {
 async function userKvDelete(key) {
   const { error } = await supabase.from('user_kv').delete()
     .eq('user_id', currentUserId).eq('key', key);
+  if (error) throw error;
+}
+
+// org_kv — same shape as user_kv but keyed by org, so every staff member
+// reads and writes the same row. updated_by records who touched it last.
+async function orgKvUpsert(key, value) {
+  const { error } = await supabase.from('org_kv').upsert(
+    { org_id: currentOrgId, key, value, updated_by: currentUserId, updated_at: new Date().toISOString() },
+    { onConflict: 'org_id,key' }
+  );
+  if (error) throw error;
+}
+
+async function orgKvDelete(key) {
+  const { error } = await supabase.from('org_kv').delete()
+    .eq('org_id', currentOrgId).eq('key', key);
   if (error) throw error;
 }
 
@@ -824,6 +859,12 @@ const WRITE_ADAPTERS = (() => {
     m[k] = {
       write: (v) => userKvUpsert(k, v),
       remove: () => userKvDelete(k),
+    };
+  }
+  for (const k of ORG_KV_KEYS) {
+    m[k] = {
+      write: (v) => orgKvUpsert(k, v),
+      remove: () => orgKvDelete(k),
     };
   }
   for (const [k, a] of Object.entries(RELATIONAL_ADAPTERS)) {
