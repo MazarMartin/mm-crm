@@ -466,6 +466,18 @@ def parse_proping_email(subject, body, date_str):
             current_entry['days_listed'] = beds_m.group(2)
             continue
 
+        # Standalone price-change amount line, e.g. "$-300,000" or "$+50,000".
+        # In the HTML body (which we now prefer, for photos) the change sits
+        # on its own line rather than trailing the guide price, so the
+        # same-line extraction below misses it. Catch it here and normalise
+        # to minus/plus-first ("-$300,000") — the format the app filters on
+        # (price_change.startsWith('-') / '+') and the historical data used.
+        if current_section == 'price_changes' and not current_entry.get('price_change'):
+            chg_line = re.match(r'^\$?([+-])\$?([\d,]+)\s*$', line)
+            if chg_line:
+                current_entry['price_change'] = chg_line.group(1) + '$' + chg_line.group(2)
+                continue
+
         # Match price line: "$1,900,000" possibly with "Proping Estimate*" or "Price Guide"
         price_m = re.match(r'(\$[\d,]+(?:\.\d+)?)', line)
         if price_m:
