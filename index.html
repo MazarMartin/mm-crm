@@ -34526,21 +34526,41 @@ function openClientProfile(clientName) {
   var _clEsc = function(ev){ if(ev.key==='Escape'){ closeClientProfile(); document.removeEventListener('keydown',_clEsc); }};
   document.addEventListener('keydown', _clEsc);
 
-  // ── Swap Match Summary into the swipe deck for eligible clients ──
+  // ── Add the swipe deck for eligible clients, ABOVE the full match list ──
+  // Previously this REPLACED the entire Match Summary with the swipe deck,
+  // which only shows listings from the last 7 days. A client whose matches
+  // all listed more than a week ago (common for high-end / niche briefs —
+  // e.g. an $11m Mosman 4-bed) then saw an empty deck and their real
+  // matching properties vanished from the profile entirely. Now the full
+  // match list always stays; the deck sits on top only when there are
+  // genuinely new listings to swipe through.
   try {
     if (typeof _swipeEligible === 'function' && _swipeEligible(client)) {
       const ms = overlay.querySelector('#mmMatchSummary');
       if (ms) {
         const title = ms.querySelector('[data-role="ms-title"]');
         const queue7d = (typeof _swGetQueue === 'function') ? _swGetQueue(clientName, locs, merged) : [];
-        if (title) title.textContent = 'Match Summary — ' + queue7d.length + ' new (last 7 days)';
-        // Clear the old match list markup and mount the swipe deck
-        const deckMount = document.createElement('div');
-        deckMount.id = 'mmSwipeDeckMount';
-        // Remove every child of ms except the h4 title
-        Array.from(ms.children).forEach(ch => { if (ch.tagName !== 'H4') ch.remove(); });
-        ms.appendChild(deckMount);
-        _swRenderDeck(clientName, merged, locs, deckMount);
+        if (title) {
+          title.textContent = 'Match Summary — ' + allMatches.length + ' propert'
+            + (allMatches.length === 1 ? 'y' : 'ies')
+            + (queue7d.length ? ' (' + queue7d.length + ' new this week)' : '');
+        }
+        if (queue7d.length > 0) {
+          // Mount the deck immediately after the title; leave the counts
+          // grid and the full match list below it untouched.
+          const deckWrap = document.createElement('div');
+          deckWrap.style.cssText = 'margin:12px 0 18px;padding-bottom:16px;border-bottom:1px solid var(--border-light)';
+          const lbl = document.createElement('div');
+          lbl.style.cssText = 'font-size:12px;font-weight:700;color:var(--text-mid);margin-bottom:8px';
+          lbl.textContent = 'New this week — swipe to review';
+          const deckMount = document.createElement('div');
+          deckMount.id = 'mmSwipeDeckMount';
+          deckWrap.appendChild(lbl);
+          deckWrap.appendChild(deckMount);
+          const h4 = ms.querySelector('h4');
+          h4.insertAdjacentElement('afterend', deckWrap);
+          _swRenderDeck(clientName, merged, locs, deckMount);
+        }
       }
     }
   } catch(e) { console.warn('[swipe] deck mount failed', e); }
