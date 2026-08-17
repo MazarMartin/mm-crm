@@ -35120,18 +35120,21 @@ function _matchesClientBrief(listing, client, locs) {
     if (b < minBeds) return false;
   }
 
-  // Baths — exclude listings missing baths data when client specifies min
+  // Baths — only exclude when the listing HAS baths data and it's below the
+  // minimum. Missing baths data must NOT exclude: Proping-email listings
+  // carry no baths (that comes from Domain enrichment, currently blocked),
+  // so treating "missing" as "reject" hid every new listing from the swipe
+  // deck for any client with a baths minimum.
   if (minBaths) {
     const b = parseInt(listing.baths || listing.bath || 0);
-    if (b === 0) return false;
-    if (b < minBaths) return false;
+    if (b > 0 && b < minBaths) return false;
   }
 
-  // Parking — exclude listings missing parking data when client specifies min
+  // Parking — same rule: only exclude on present-but-below data, never on
+  // missing data (also enrichment-sourced, often absent on new listings).
   if (minCar) {
     const p = parseInt(listing.parking || listing.car || 0);
-    if (p === 0) return false;
-    if (p < minCar) return false;
+    if (p > 0 && p < minCar) return false;
   }
 
   // Property type — structured prefType takes priority, then spec types
@@ -35145,10 +35148,11 @@ function _matchesClientBrief(listing, client, locs) {
   };
   if (prefType) {
     const lt = (listing.propertyType || listing.type || '').toLowerCase().replace(/[\s_]/g,'');
-    if (!lt) return false;  // no type data — skip
+    if (lt) {  // only filter when type data is present; missing type must not exclude (enrichment-sourced)
     const pt = prefType.toLowerCase().replace(/[\s_]/g,'');
     const aliases = _typeAliases[pt] || [pt];
     if (!aliases.some(a => lt.includes(a) || a.includes(lt))) return false;
+    }
   } else if (specTypes.length) {
     const lt = (listing.propertyType || listing.type || '').toLowerCase().replace(/[\s_]/g,'');
     if (lt && !specTypes.some(t => {
