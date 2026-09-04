@@ -32708,7 +32708,7 @@ function _buildDataContext(q) {
   ctx.stats = {
     totalForSale: (D.sampleListings||[]).length,
     totalSold: (D.soldListings||[]).length,
-    totalOffMarket: (D.sampleOff||[]).length,
+    totalOffMarket: _omMatchPool().length,
     propingDays: (typeof propingHistory !== 'undefined' ? propingHistory : []).length
   };
 
@@ -34264,7 +34264,7 @@ function openClientProfile(clientName) {
   // ── New off-market this week (in client suburbs) ──
   const _now7 = Date.now(), _sevenAgo = _now7 - 7*24*60*60*1000;
   const _locMatch = (sub) => { const s=(sub||'').toLowerCase(); return !locs.length || locs.some(loc=>s.includes(loc)||loc.includes(s)); };
-  const newOffMarket7d = (D.sampleOff||[]).filter(l => {
+  const newOffMarket7d = _omMatchPool().filter(l => {
     if (!_locMatch(l.suburb)) return false;
     const d = _parseFlexDate(l.listDate||l.date||'');
     return d && d >= _sevenAgo;
@@ -34926,7 +34926,7 @@ function _getClientPropingStats(locs) {
 
   // Count for sale and off market in client's suburbs
   (D.sampleListings || []).forEach(l => { if (matchesLoc(l.suburb)) stats.totalForSale++; });
-  (D.sampleOff || []).forEach(l => { if (matchesLoc(l.suburb)) stats.totalOffMarket++; });
+  _omMatchPool().forEach(l => { if (matchesLoc(l.suburb)) stats.totalOffMarket++; });
 
   return stats;
 }
@@ -35128,11 +35128,15 @@ function _matchesClientBrief(listing, client, locs) {
   const prefType = client.prefType || '';
   const specTypes = spec.types || [];
 
-  // Beds — exclude listings missing beds data when client specifies min
+  // Beds — same tolerance rule as baths/car/type: only exclude when the
+  // data is PRESENT and below the minimum. Was strict (missing = reject)
+  // while everything in matching came from scraped sources that always
+  // carry beds; Mon's uploaded off-markets are address+agent only, so
+  // strictness would hide the firm's own list from every client with a
+  // beds minimum. A known 2-bed still never shows to a 4-bed client.
   if (minBeds) {
     const b = parseInt(listing.beds || listing.bed || 0);
-    if (b === 0) return false;   // no beds data — skip this listing
-    if (b < minBeds) return false;
+    if (b > 0 && b < minBeds) return false;
   }
 
   // Baths — only exclude when the listing HAS baths data and it's below the
@@ -35183,8 +35187,27 @@ function _getForSaleMatches(locs, client) {
   return (D.sampleListings || []).filter(l => _matchesClientBrief(l, client, locs));
 }
 
+// The complete off-market pool: scraped/baked (D.sampleOff) plus manually
+// added and spreadsheet-uploaded entries (mmNewOff), deduped. Matching, the
+// swipe deck, counts, and the map must all read THIS — reading D.sampleOff
+// alone silently excludes everything staff add themselves (Mon's uploaded
+// list lived only on the Off Market tab and never reached a client profile).
+function _omMatchPool() {
+  const base = D.sampleOff || [];
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const seen = new Set();
+  base.forEach(l => { seen.add(norm(l.address)); seen.add(norm(l.address) + norm(l.suburb)); });
+  const extra = lsGet('mmNewOff', []).filter(e => {
+    const k = norm(e.address) + norm(e.suburb);
+    if (seen.has(k) || seen.has(norm(e.address))) return false;
+    seen.add(k);
+    return true;
+  });
+  return [...base, ...extra];
+}
+
 function _getOffMarketMatches(locs, client) {
-  return (D.sampleOff || []).filter(l => _matchesClientBrief(l, client, locs));
+  return _omMatchPool().filter(l => _matchesClientBrief(l, client, locs));
 }
 
 /* ═════════════════════════════════════════════════════════════════════════
@@ -35359,7 +35382,7 @@ function _swGetQueue(clientName, locs, client) {
     .filter(briefMatch)
     .map(l => ({...l, _src: 'online'}));
 
-  const om = (D.sampleOff || []).filter(l => {
+  const om = _omMatchPool().filter(l => {
     const d = _parseFlexDate(l.listDate || l.date || '');
     return d && d >= sevenAgo && briefMatch(l);
   }).map(l => ({...l, _src: 'offmkt'}));
@@ -37579,7 +37602,7 @@ function filterOffMarket() {
 function toggleMapOM() {
   const el = document.getElementById('om-map');
   if (el.classList.contains('active')) { el.classList.remove('active'); return; }
-  showPropertyMap('om-map', D.sampleOff||[], l=>l.address||l.agent||'', l=>l.price||'', l=>l.suburb||'', l=>l.address||'');
+  showPropertyMap('om-map', _omMatchPool(), l=>l.address||l.agent||'', l=>l.price||'', l=>l.suburb||'', l=>l.address||'');
 }
 
 function addNewOff() {
