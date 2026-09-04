@@ -37382,10 +37382,14 @@ function buildOffMarketTab() {
       <div class="filter-group"><label>Search</label><input id="om-q" placeholder="Address, agent, type..." oninput="filterOffMarket()"></div>
       <div class="filter-group" style="justify-content:end">
         <button class="btn-sm btn-outline" onclick="toggleMapOM()">Toggle Map</button>
+        ${window.mmUserRole === 'client' ? '' : `
         <button class="btn-sm btn-gold" onclick="document.getElementById('newOffForm').classList.toggle('active')">+ Add Property</button>
         <button class="btn-sm btn-outline" onclick="document.getElementById('omScreenshotForm').classList.toggle('active')">Upload Screenshot</button>
+        <button class="btn-sm btn-outline" onclick="document.getElementById('om-xlsx-input').click()">Upload Spreadsheet</button>
+        <input type="file" id="om-xlsx-input" accept=".xlsx,.xls,.csv" style="display:none" onchange="omSpreadsheetUpload(this)">`}
       </div>
     </div>
+    <div id="om-upload-summary"></div>
     <div class="inline-form" id="omScreenshotForm" style="border:2px dashed var(--gold);background:#FFFDF5">
       <div style="text-align:center;padding:12px">
         <div style="font-weight:700;font-size:14px;margin-bottom:8px">Upload Off-Market Screenshot</div>
@@ -37598,6 +37602,151 @@ function addNewOff() {
   lsSet('mmNewOff', items);
   showToast('Property added');
   buildOffMarketTab();
+}
+
+// ─── Off-market spreadsheet upload (Mon's workflow) ─────────────────────
+// Parses an .xlsx/.csv in the browser and MERGES rows into mmNewOff (the
+// same org-synced store the "+ Add Property" form writes), deduped against
+// everything already on the tab. Merge-never-replace makes re-uploading an
+// updated sheet idempotent: only new rows are added. Accepts the official
+// template (Address | Suburb | Agent(s) | ...optionals) and also raw
+// two-column sheets with the suburb embedded in the address — extraction
+// logic proven on Mon's real 141-row list (Sep 2026).
+
+const _OM_SUBURBS = ['cremorne point','neutral bay','crows nest','north sydney','milsons point',
+  'kurraba point','cremorne','mosman','cammeray','northbridge','willoughby','naremburn','artarmon',
+  'waverton','wollstonecraft','st leonards','castlecrag','castle cove','middle cove','greenwich',
+  'longueville','lane cove','riverview','killara','kirribilli','mcmahons point','lavender bay',
+  'chatswood','seaforth','balgowlah','clifton gardens','beauty point','spit junction','hunters hill'];
+
+// Returns {suburb, street}. Handles "…, Suburb", "… Suburb" (no comma),
+// mixed casing, and a trailing "NSW 2068"-style postcode.
+function _omExtractSuburb(addr) {
+  const a = String(addr || '').replace(/[,\s]+nsw\s*\d{4}\s*$/i, '').trim();
+  const al = a.toLowerCase().replace(/-/g, ' ').replace(/[ .,]+$/, '');
+  const known = [..._OM_SUBURBS].sort((x, y) => y.length - x.length);
+  for (const sb of known) {
+    if (al.endsWith(sb)) {
+      const street = a.slice(0, a.length - sb.length).replace(/[ ,.\-]+$/, '').trim();
+      const title = sb.replace(/\b\w/g, c => c.toUpperCase());
+      return { suburb: title, street };
+    }
+  }
+  const ci = a.lastIndexOf(',');
+  if (ci > 0) {
+    return {
+      suburb: a.slice(ci + 1).trim().replace(/\b\w/g, c => c.toUpperCase()),
+      street: a.slice(0, ci).trim(),
+    };
+  }
+  return { suburb: '', street: a };
+}
+
+// SheetJS loaded lazily on first upload so the 6MB page doesn't grow for
+// everyone who never touches this button.
+let _omSheetJSPromise = null;
+function _omLoadSheetJS() {
+  if (window.XLSX) return Promise.resolve();
+  if (!_omSheetJSPromise) {
+    _omSheetJSPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload = resolve;
+      s.onerror = () => { _omSheetJSPromise = null; reject(new Error('could not load spreadsheet library')); };
+      document.head.appendChild(s);
+    });
+  }
+  return _omSheetJSPromise;
+}
+
+async function omSpreadsheetUpload(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  input.value = '';   // allow re-selecting the same file after a fix
+  showToast('Reading ' + file.name + '…');
+  try {
+    await _omLoadSheetJS();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+
+    // Find the header row (first row in the first few mentioning "address")
+    const hdrIdx = rows.findIndex((r, i) => i < 5 && r.some(c => /address/i.test(String(c))));
+    if (hdrIdx === -1) { _omShowUploadSummary(null, null, null, 'No "Address" column found. Use the template, or make sure the first row has an Address header.'); return; }
+    const hdr = rows[hdrIdx].map(c => String(c).toLowerCase());
+    const col = (re) => hdr.findIndex(c => re.test(c));
+    const cols = {
+      address: col(/address/), suburb: col(/suburb/), agent: col(/agent/),
+      price: col(/price/), beds: col(/bed/), baths: col(/bath/),
+      cars: col(/car|park/), type: col(/type/), notes: col(/note|comment/),
+    };
+    const cell = (r, i) => i >= 0 ? String(r[i] ?? '').trim() : '';
+
+    // Existing keys across every source the tab renders
+    const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const existing = lsGet('mmNewOff', []);
+    const existingKeys = new Set();
+    const addKeys = (addr, sub) => { existingKeys.add(norm(addr)); existingKeys.add(norm(addr) + norm(sub)); };
+    existing.forEach(e => addKeys(e.address, e.suburb));
+    (D.sampleOff || []).forEach(l => addKeys(l.address, l.suburb));
+    (typeof emailOffMarkets !== 'undefined' ? emailOffMarkets : []).forEach(e => addKeys(e.address, e.suburb));
+
+    const today = new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+    const added = [], skipped = [], attention = [];
+    const seenInFile = new Set();
+
+    for (const r of rows.slice(hdrIdx + 1)) {
+      const rawAddr = cell(r, cols.address);
+      if (!rawAddr || /^\d+ example street$/i.test(rawAddr)) continue;   // blank / template example row
+      let suburb = cell(r, cols.suburb);
+      let street = rawAddr;
+      if (!suburb) {
+        const ex = _omExtractSuburb(rawAddr);
+        suburb = ex.suburb; street = ex.street;
+      }
+      const k = norm(street) + norm(suburb);
+      if (seenInFile.has(k)) continue;
+      seenInFile.add(k);
+      if (!suburb) { attention.push(rawAddr); continue; }   // not imported — fix and re-upload
+      if (existingKeys.has(k) || existingKeys.has(norm(rawAddr)) || existingKeys.has(norm(street))) {
+        skipped.push(rawAddr); continue;
+      }
+      added.push({
+        date: today, agent: cell(r, cols.agent), address: street, suburb: suburb,
+        price: cell(r, cols.price), beds: cell(r, cols.beds), baths: cell(r, cols.baths),
+        parking: cell(r, cols.cars), propertyType: cell(r, cols.type),
+        comments: cell(r, cols.notes), source: 'mazar_martin',
+      });
+    }
+
+    if (added.length) lsSet('mmNewOff', [...existing, ...added]);
+    buildOffMarketTab();
+    _omShowUploadSummary(added, skipped, attention, null);
+  } catch (e) {
+    console.error('[OM upload]', e);
+    _omShowUploadSummary(null, null, null, 'Could not read that file (' + (e.message || e) + '). Is it a valid Excel/CSV file?');
+  }
+}
+
+function _omShowUploadSummary(added, skipped, attention, errorMsg) {
+  const el = document.getElementById('om-upload-summary');
+  if (!el) return;
+  if (errorMsg) {
+    el.innerHTML = `<div style="margin:10px 0;padding:12px 16px;border-radius:var(--r-sm);background:#FFEBEE;border:1px solid #C62828;color:#C62828;font-size:13px;font-weight:600">✕ ${_swEsc(errorMsg)}</div>`;
+    return;
+  }
+  const bits = [];
+  bits.push(`<span style="color:var(--green);font-weight:700">✓ ${added.length} added</span>`);
+  if (skipped.length) bits.push(`<span style="color:var(--text-mid)">${skipped.length} skipped (already in the app)</span>`);
+  const attnHtml = attention.length ? `
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid #E0C97F">
+      <div style="font-weight:700;color:#B45309;font-size:12px;margin-bottom:4px">⚠ ${attention.length} not imported — couldn't work out the suburb. Add it after a comma (or use the Suburb column) and upload again:</div>
+      ${attention.map(a => `<div style="font-size:12px;color:var(--text-mid)">• ${_swEsc(a)}</div>`).join('')}
+    </div>` : '';
+  el.innerHTML = `<div style="margin:10px 0;padding:12px 16px;border-radius:var(--r-sm);background:#F0F7F1;border:1px solid var(--green);font-size:13px">
+      ${bits.join(' &nbsp;·&nbsp; ')}${attnHtml}
+      <span style="float:right;cursor:pointer;color:var(--text-light);font-weight:700" onclick="this.parentElement.remove()">✕</span>
+    </div>`;
 }
 
 function handleOMScreenshot(input) {
