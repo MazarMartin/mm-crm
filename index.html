@@ -37473,7 +37473,10 @@ function filterOffMarket() {
   const beds = parseInt(document.getElementById('om-beds')?.value) || 0;
   const q = (document.getElementById('om-q')?.value || '').toLowerCase();
   const statusFilter = document.getElementById('om-status')?.value || '';
-  const userAdded = lsGet('mmNewOff', []);
+  // _userIdx ties a rendered row back to its mmNewOff slot so the ✎ editor
+  // can load and save the right entry. Only user-added rows get one —
+  // scraped/baked rows are pipeline-owned and not editable here.
+  const userAdded = lsGet('mmNewOff', []).map((e, i) => ({ ...e, _userIdx: i }));
   const emailOff = (typeof emailOffMarkets !== 'undefined' ? emailOffMarkets : []).map(e => ({
     date: e.date||'', agent: e.agent||'', address: e.address||'', suburb: e.suburb||'',
     price: e.price||'', comments: (e.notes||'') + (e.agency ? ' ['+e.agency+']' : ''),
@@ -37594,9 +37597,88 @@ function filterOffMarket() {
     <td style="font-size:11px">${l.agent||'—'}</td>
     <td style="font-size:11px">${l.agency||''}</td>
     <td style="font-size:11px;color:var(--text-light)">${l.listDate||l.date||'—'}</td>
-    <td style="font-size:11px;max-width:200px">${l.comments||''}</td>
+    <td style="font-size:11px;max-width:200px">${l.comments||''}${
+      l._userIdx !== undefined && window.mmUserRole !== 'client'
+        ? ` <button title="Edit this property" onclick="omEditRow(${l._userIdx})" style="border:1px solid var(--border-light);background:var(--white);border-radius:6px;cursor:pointer;font-size:11px;padding:2px 7px;margin-left:6px;vertical-align:middle">✎</button>`
+        : ''}</td>
   </tr>`;
   });
+}
+
+// ─── Edit / delete a user-added off-market entry ────────────────────────
+// Only mmNewOff entries are editable: scraped and baked listings are
+// rewritten by the pipeline daily, so hand edits there would be lost.
+// Saving writes the whole array back through lsSet, which syncs org-wide.
+function omEditRow(idx) {
+  const items = lsGet('mmNewOff', []);
+  const p = items[idx];
+  if (!p) { showToast('Entry not found — refresh and try again'); return; }
+  document.getElementById('om-edit-modal')?.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'om-edit-modal';
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:flex;align-items:center;justify-content:center';
+  const inp = 'width:100%;padding:7px 9px;border:1px solid var(--border-light);border-radius:6px;font-size:13px;margin-top:3px;box-sizing:border-box';
+  const lbl = 'font-size:11px;font-weight:600;color:var(--text-mid)';
+  wrap.innerHTML = `<div style="background:var(--white);border-radius:12px;padding:22px;width:min(540px,92vw);max-height:90vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div style="font-weight:700;font-size:15px;margin-bottom:14px">Edit Off-Market Property</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label style="${lbl};grid-column:1/-1">Address<input id="ome-addr" style="${inp}"></label>
+      <label style="${lbl}">Suburb<input id="ome-suburb" style="${inp}"></label>
+      <label style="${lbl}">Agent<input id="ome-agent" style="${inp}"></label>
+      <label style="${lbl}">Price<input id="ome-price" style="${inp}" placeholder="e.g. $3.5m"></label>
+      <label style="${lbl}">Type<input id="ome-type" style="${inp}" placeholder="House / Apartment…"></label>
+      <label style="${lbl}">Beds<input id="ome-beds" style="${inp}" inputmode="numeric"></label>
+      <label style="${lbl}">Baths<input id="ome-baths" style="${inp}" inputmode="numeric"></label>
+      <label style="${lbl}">Cars<input id="ome-cars" style="${inp}" inputmode="numeric"></label>
+      <label style="${lbl}">Land size<input id="ome-land" style="${inp}" placeholder="e.g. 550 m²"></label>
+      <label style="${lbl};grid-column:1/-1">Notes<textarea id="ome-notes" rows="2" style="${inp}"></textarea></label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:space-between">
+      <button class="btn-sm btn-outline" style="color:#C62828;border-color:#C62828" onclick="omDeleteRow(${idx})">Delete</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-sm btn-outline" onclick="document.getElementById('om-edit-modal').remove()">Cancel</button>
+        <button class="btn-sm btn-gold" onclick="omSaveRow(${idx})">Save</button>
+      </div>
+    </div>
+  </div>`;
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  document.body.appendChild(wrap);
+  // Prefill via .value so quotes/apostrophes in the data can't break markup
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  set('ome-addr', p.address); set('ome-suburb', p.suburb); set('ome-agent', p.agent);
+  set('ome-price', p.price); set('ome-type', p.propertyType); set('ome-beds', p.beds);
+  set('ome-baths', p.baths); set('ome-cars', p.parking); set('ome-land', p.landSize);
+  set('ome-notes', p.comments);
+}
+
+function omSaveRow(idx) {
+  const items = lsGet('mmNewOff', []);
+  const p = items[idx];
+  if (!p) return;
+  const val = (id) => (document.getElementById(id)?.value || '').trim();
+  const addr = val('ome-addr');
+  if (!addr) { showToast('Address is required'); return; }
+  p.address = addr;               p.suburb = val('ome-suburb');
+  p.agent = val('ome-agent');     p.price = val('ome-price');
+  p.propertyType = val('ome-type'); p.beds = val('ome-beds');
+  p.baths = val('ome-baths');     p.parking = val('ome-cars');
+  p.landSize = val('ome-land');   p.comments = val('ome-notes');
+  lsSet('mmNewOff', items);
+  document.getElementById('om-edit-modal')?.remove();
+  showToast('Property updated');
+  buildOffMarketTab();
+}
+
+function omDeleteRow(idx) {
+  const items = lsGet('mmNewOff', []);
+  const p = items[idx];
+  if (!p) return;
+  if (!confirm('Delete ' + (p.address || 'this property') + '? This removes it for everyone.')) return;
+  items.splice(idx, 1);
+  lsSet('mmNewOff', items);
+  document.getElementById('om-edit-modal')?.remove();
+  showToast('Property deleted');
+  buildOffMarketTab();
 }
 
 function toggleMapOM() {
@@ -37695,7 +37777,7 @@ async function omSpreadsheetUpload(input) {
 
     // Find the header row (first row in the first few mentioning "address")
     const hdrIdx = rows.findIndex((r, i) => i < 5 && r.some(c => /address/i.test(String(c))));
-    if (hdrIdx === -1) { _omShowUploadSummary(null, null, null, 'No "Address" column found. Use the template, or make sure the first row has an Address header.'); return; }
+    if (hdrIdx === -1) { _omShowUploadSummary(null, null, null, null, 'No "Address" column found. Use the template, or make sure the first row has an Address header.'); return; }
     const hdr = rows[hdrIdx].map(c => String(c).toLowerCase());
     const col = (re) => hdr.findIndex(c => re.test(c));
     const cols = {
@@ -37705,18 +37787,30 @@ async function omSpreadsheetUpload(input) {
     };
     const cell = (r, i) => i >= 0 ? String(r[i] ?? '').trim() : '';
 
-    // Existing keys across every source the tab renders
+    // Index existing entries. Manual (mmNewOff) ones map to the actual
+    // entry object so a matching upload row can ENRICH it — fill in beds,
+    // price etc. that were blank. Mon maintains one master sheet; adding
+    // details there and re-uploading must update the app, not be skipped.
+    // Scraped/baked sources can't be edited from here, so those just skip.
     const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const existing = lsGet('mmNewOff', []);
-    const existingKeys = new Set();
-    const addKeys = (addr, sub) => { existingKeys.add(norm(addr)); existingKeys.add(norm(addr) + norm(sub)); };
-    existing.forEach(e => addKeys(e.address, e.suburb));
-    (D.sampleOff || []).forEach(l => addKeys(l.address, l.suburb));
-    (typeof emailOffMarkets !== 'undefined' ? emailOffMarkets : []).forEach(e => addKeys(e.address, e.suburb));
+    const manualByKey = new Map();
+    existing.forEach(e => {
+      manualByKey.set(norm(e.address), e);
+      manualByKey.set(norm(e.address) + norm(e.suburb), e);
+    });
+    const bakedKeys = new Set();
+    const addBaked = (addr, sub) => { bakedKeys.add(norm(addr)); bakedKeys.add(norm(addr) + norm(sub)); };
+    (D.sampleOff || []).forEach(l => addBaked(l.address, l.suburb));
+    (typeof emailOffMarkets !== 'undefined' ? emailOffMarkets : []).forEach(e => addBaked(e.address, e.suburb));
 
     const today = new Date().toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
-    const added = [], skipped = [], attention = [];
+    const added = [], updated = [], skipped = [], attention = [];
     const seenInFile = new Set();
+    // Fields an upload row may fill in on an existing entry (blanks only —
+    // never overwrites, so in-app edits survive a re-upload).
+    const ENRICH = [['agent','agent'],['price','price'],['beds','beds'],['baths','baths'],
+                    ['parking','cars'],['propertyType','type'],['comments','notes']];
 
     for (const r of rows.slice(hdrIdx + 1)) {
       const rawAddr = cell(r, cols.address);
@@ -37731,7 +37825,18 @@ async function omSpreadsheetUpload(input) {
       if (seenInFile.has(k)) continue;
       seenInFile.add(k);
       if (!suburb) { attention.push(rawAddr); continue; }   // not imported — fix and re-upload
-      if (existingKeys.has(k) || existingKeys.has(norm(rawAddr)) || existingKeys.has(norm(street))) {
+
+      const manual = manualByKey.get(k) || manualByKey.get(norm(rawAddr)) || manualByKey.get(norm(street));
+      if (manual) {
+        let changed = false;
+        for (const [field, colName] of ENRICH) {
+          const v = cell(r, cols[colName]);
+          if (v && !(manual[field] || '').trim()) { manual[field] = v; changed = true; }
+        }
+        (changed ? updated : skipped).push(rawAddr);
+        continue;
+      }
+      if (bakedKeys.has(k) || bakedKeys.has(norm(rawAddr)) || bakedKeys.has(norm(street))) {
         skipped.push(rawAddr); continue;
       }
       added.push({
@@ -37742,16 +37847,16 @@ async function omSpreadsheetUpload(input) {
       });
     }
 
-    if (added.length) lsSet('mmNewOff', [...existing, ...added]);
+    if (added.length || updated.length) lsSet('mmNewOff', [...existing, ...added]);
     buildOffMarketTab();
-    _omShowUploadSummary(added, skipped, attention, null);
+    _omShowUploadSummary(added, updated, skipped, attention, null);
   } catch (e) {
     console.error('[OM upload]', e);
-    _omShowUploadSummary(null, null, null, 'Could not read that file (' + (e.message || e) + '). Is it a valid Excel/CSV file?');
+    _omShowUploadSummary(null, null, null, null, 'Could not read that file (' + (e.message || e) + '). Is it a valid Excel/CSV file?');
   }
 }
 
-function _omShowUploadSummary(added, skipped, attention, errorMsg) {
+function _omShowUploadSummary(added, updated, skipped, attention, errorMsg) {
   const el = document.getElementById('om-upload-summary');
   if (!el) return;
   if (errorMsg) {
@@ -37760,7 +37865,8 @@ function _omShowUploadSummary(added, skipped, attention, errorMsg) {
   }
   const bits = [];
   bits.push(`<span style="color:var(--green);font-weight:700">✓ ${added.length} added</span>`);
-  if (skipped.length) bits.push(`<span style="color:var(--text-mid)">${skipped.length} skipped (already in the app)</span>`);
+  if (updated.length) bits.push(`<span style="color:#1565C0;font-weight:600">${updated.length} updated with new details</span>`);
+  if (skipped.length) bits.push(`<span style="color:var(--text-mid)">${skipped.length} skipped (no changes)</span>`);
   const attnHtml = attention.length ? `
     <div style="margin-top:8px;padding-top:8px;border-top:1px solid #E0C97F">
       <div style="font-weight:700;color:#B45309;font-size:12px;margin-bottom:4px">⚠ ${attention.length} not imported — couldn't work out the suburb. Add it after a comma (or use the Suburb column) and upload again:</div>
