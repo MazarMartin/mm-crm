@@ -237,35 +237,42 @@ free. Runs fully in parallel until the final step, so nothing is at risk.
 - [x] Supabase → Auth → Redirect URLs includes `https://mm-crm.pages.dev/**`
       (GitHub URL kept; both work at once).
 
-## Cutover (on the call with Mon — ~20 min, quiet time)
-1. **Custom domain** — Cloudflare Pages → mm-crm → Custom domains → add
-   `app.mazarmartin.com.au`. Cloudflare shows a CNAME target
-   (`mm-crm.pages.dev`). Whoever holds mazarmartin.com.au DNS adds ONE
-   record: `app` CNAME → `mm-crm.pages.dev`. Nothing else moves (email etc
-   untouched). Wait for Cloudflare to show the domain Active (cert auto).
-   Done when: https://app.mazarmartin.com.au loads the app over HTTPS.
-2. **Supabase redirect** — add `https://app.mazarmartin.com.au/**` to
-   Auth → URL Configuration → Redirect URLs. Optionally set Site URL to it.
-   Done when: a magic link requested from the new domain lands back on it.
-3. **Tell people** — Gerard, Jeremy, Mon + any client login: new address,
-   and they'll log in once more (sessions are per-domain). Old link keeps
-   working until step 5, so no rush/cliff.
-4. **Workflows** — remove the GitHub Pages deploy steps: delete
-   `.github/workflows/deploy.yml`; in `pipeline.yml` drop the
-   `configure-pages` / `upload-pages-artifact` / `deploy-pages` steps and
-   the `pages:`/`id-token:` permissions + `environment`. The daily job just
-   commits; Cloudflare auto-builds on the push. (David — code change.)
-5. **Repo private** — GitHub → MazarMartin/mm-crm → Settings → Danger zone →
-   Change visibility → Private. GitHub Pages stops (intended). Cloudflare
-   keeps building (its app access survives). Do the same for David's fork.
-   Done when: https://mazarmartin.github.io/mm-crm/ is a 404 and
-   app.mazarmartin.com.au still works after the NEXT nightly run.
-6. **Verify next morning** — Actions run green, Cloudflare deployment green,
-   yesterday's Proping data visible on the new domain.
+- [x] Custom domain `app.mazarmartin.com.au` added in Cloudflare (CNAME
+      setup, NOT a DNS transfer: their DNS is GoDaddy / domaincontrol.com
+      and email is Microsoft 365, both untouched). GoDaddy record:
+      `app` CNAME -> `mm-crm.pages.dev`. Loads over HTTPS.
+- [x] Supabase Redirect URLs includes `https://app.mazarmartin.com.au/**`.
+      Magic link requested from the new domain lands back on it.
 
-## Rollback (any point before step 5)
+## Cutover (remaining — ~15 min, quiet time)
+1. **Supabase Site URL** -> `https://app.mazarmartin.com.au`
+   (Auth -> URL Configuration). Do this AT cutover, not before: the
+   "Send login invite" button, `create_client_user.py` and
+   `create_staff_user.py` pass no redirect, so every invite email uses the
+   Site URL. Changing it early sends people to a domain nobody announced.
+   Also why a link requested from a non-allowlisted domain "jumps" to
+   GitHub: Supabase falls back to Site URL (and Chrome opens it in the
+   installed GitHub PWA window if one exists).
+2. **Tell people** — Gerard, Jeremy, Mon + client logins: new address, one
+   fresh login (sessions are per-domain). Anyone who installed the GitHub
+   version as a desktop app should uninstall it and reinstall from the new
+   address. Old link keeps working until step 4.
+3. **Workflows** — delete `.github/workflows/deploy.yml`; in `pipeline.yml`
+   drop `configure-pages` / `upload-pages-artifact` / `deploy-pages`, the
+   `pages:` + `id-token:` permissions and the `environment` block. Daily job
+   just commits; Cloudflare builds on push. (David — code change.)
+4. **Repo private** — MazarMartin/mm-crm -> Settings -> Change visibility ->
+   Private (and David's fork). GitHub Pages stops (intended); Cloudflare
+   keeps building. Done when mazarmartin.github.io/mm-crm/ is 404 and the
+   new domain still updates after the next nightly run.
+5. **Verify next morning** — Actions green, Cloudflare deployment green,
+   yesterday's Proping data visible on app.mazarmartin.com.au.
+6. **Tidy** — remove the GitHub URL from Supabase Redirect URLs once nobody
+   is using it.
+
+## Rollback (any point before step 4)
 Nothing to undo — GitHub Pages is still serving. Just don't announce the
-new URL. After step 5: flip the repo back to Public and Pages resumes.
+new URL. After step 4: flip the repo back to Public and Pages resumes.
 
 ## Not fixed by this (be straight if asked)
 Anything already cloned while the repo was public, and the git history
