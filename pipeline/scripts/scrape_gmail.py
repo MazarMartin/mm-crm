@@ -444,6 +444,9 @@ def parse_proping_email(subject, body, date_str):
                 'address': addr,
                 'suburb': suburb,
                 'beds': '',
+                'baths': '',
+                'parking': '',
+                'landSize': '',
                 'days_listed': '',
                 'price': '',
                 'agent': '',
@@ -459,11 +462,44 @@ def parse_proping_email(subject, body, date_str):
         if not current_entry:
             continue
 
-        # Match beds + days listed: "2 bed0 Days listed" or "3 bed42 Days listed"
+        # OLD layout (until 7 Sep 2026): "2 bed0 Days listed" — beds + days on
+        # one line. Still needed: the daily run re-parses 90 days of email.
         beds_m = re.match(r'(\d+)\s*bed\s*(\d+)\s*[Dd]ays?\s*listed', line)
         if beds_m:
             current_entry['beds'] = beds_m.group(1)
             current_entry['days_listed'] = beds_m.group(2)
+            continue
+
+        # NEW layout (from 8 Sep 2026). Proping split the stats across lines
+        # and added baths, car spaces and land size:
+        #     "4 bed 3 bath 2"      beds, optional baths, optional car count
+        #     "car 24 days"         car label + days listed (no land size), or
+        #     "car"                 label alone, then
+        #     "689 sqm 103 days"    land size + days listed
+        # Beds/baths sometimes arrive as "4.0". Anchored patterns so auction
+        # lines ("Auction Pushed Out 28 Days") and section headers
+        # ("Over 90 Days Listed(2)") can't match. A negative days value (seen
+        # on a few listings, e.g. "car -1 days") is stored as "0".
+        def _num(s):
+            return str(int(float(s.replace(',', '')))) if s else ''
+
+        stats_m = re.match(r'^(\d+(?:\.\d+)?)\s*bed(?:\s+(\d+(?:\.\d+)?)\s*bath)?(?:\s+(\d+(?:\.\d+)?))?\s*$', line, re.I)
+        if stats_m:
+            current_entry['beds'] = _num(stats_m.group(1))
+            current_entry['baths'] = _num(stats_m.group(2))
+            current_entry['parking'] = _num(stats_m.group(3))
+            continue
+
+        car_days_m = re.match(r'^cars?(?:\s+(-?\d+)\s*days?)?\s*$', line, re.I)
+        if car_days_m:
+            if car_days_m.group(1) is not None:
+                current_entry['days_listed'] = str(max(0, int(car_days_m.group(1))))
+            continue
+
+        land_days_m = re.match(r'^([\d,]+(?:\.\d+)?)\s*(?:sqm|m²|m2)\s+(-?\d+)\s*days?\s*$', line, re.I)
+        if land_days_m:
+            current_entry['landSize'] = land_days_m.group(1).replace(',', '') + ' m²'
+            current_entry['days_listed'] = str(max(0, int(land_days_m.group(2))))
             continue
 
         # Standalone price-change amount line, e.g. "$-300,000" or "$+50,000".

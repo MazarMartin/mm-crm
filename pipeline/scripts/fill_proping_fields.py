@@ -33,17 +33,17 @@ filled_photo = 0
 
 for day in history:
     for p in day.get('newly_listed', []):
-        # Skip only if EVERY fillable field is already present. Previously
-        # this skipped as soon as `baths` was set, which meant heroPhoto
-        # (added later) never backfilled onto existing items.
-        if p.get('baths') and p.get('heroPhoto'): continue
+        # Skip only if EVERY fillable field is already present. Since Proping's
+        # 8 Sep 2026 layout change the email itself supplies baths/car/land,
+        # so propertyType is now usually the only gap — it must be part of
+        # the skip test or Domain would never fill it in.
+        if p.get('baths') and p.get('heroPhoto') and p.get('propertyType'): continue
         pa, ps = p.get('address',''), p.get('suburb','').lower()
         for d in domain_fs:
             if match(pa, d.get('address',''), ps, d.get('suburb','').lower()):
-                if d.get('baths'): p['baths'] = d['baths']
-                if d.get('parking'): p['parking'] = d['parking']
-                if d.get('propertyType'): p['propertyType'] = d['propertyType']
-                if d.get('landSize'): p['landSize'] = d['landSize']
+                # Fill blanks only: values parsed from the Proping email win.
+                for f in ('baths', 'parking', 'propertyType', 'landSize'):
+                    if d.get(f) and not p.get(f): p[f] = d[f]
                 if d.get('heroPhoto') and not p.get('heroPhoto'):
                     p['heroPhoto'] = d['heroPhoto']
                     filled_photo += 1
@@ -51,14 +51,12 @@ for day in history:
                 break
 
     for p in day.get('sold', []):
-        if p.get('baths') and p.get('heroPhoto'): continue
+        if p.get('baths') and p.get('heroPhoto') and p.get('propertyType'): continue
         pa, ps = p.get('address',''), p.get('suburb','').lower()
         for d in domain_sold:
             if match(pa, d.get('address',''), ps, d.get('suburb','').lower()):
-                if d.get('baths'): p['baths'] = d['baths']
-                if d.get('parking'): p['parking'] = d['parking']
-                if d.get('propertyType'): p['propertyType'] = d['propertyType']
-                if d.get('landSize'): p['landSize'] = d['landSize']
+                for f in ('baths', 'parking', 'propertyType', 'landSize'):
+                    if d.get(f) and not p.get(f): p[f] = d[f]
                 if d.get('method'): p['method'] = d['method']
                 if d.get('heroPhoto') and not p.get('heroPhoto'):
                     p['heroPhoto'] = d['heroPhoto']

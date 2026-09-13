@@ -433,4 +433,22 @@ migration ~1 hr, not done.)
   regression fix; match-list/brief-filter fixes; Mon's 141 off-markets
   imported, spreadsheet upload + row editor + enrich-on-reupload.
 
+### 2026-09-13 (late) — Proping changed its email layout on 8 Sep; parser updated
+- Found while baselining before the first Scrapfly run: beds and days_listed
+  were 100% through 7 Sep and 0% from 8 Sep, every section. No code change —
+  Proping moved from "2 bed0 Days listed" to a multi-line block that ALSO
+  carries baths, car spaces and land size ("4 bed 3 bath 2" / "car" /
+  "689 sqm 103 days"). Emails now also arrive via Jeremy's and Mon's Proping
+  accounts (merged by address — harmless).
+- scrape_gmail.py parses both layouts (old kept: daily run re-reads 90 days).
+  Verified old-vs-new parser on real mail: new layout 0 -> 100% beds/baths/
+  days, ~85% car, ~33% land (apartments have none); old layout output
+  identical; zero existing values changed; entry counts identical.
+- fill_proping_fields.py: skip test now also requires propertyType (otherwise
+  Domain would never fill type once baths come from the email) and Domain
+  values only fill blanks rather than overwriting email values.
+- Consequence for Scrapfly: Proping now covers baths/car/land for alert
+  listings, but Domain is still the only source for property type and for
+  the full For Sale / Sold inventory. Still needed, smaller role.
+
 ### (next session — append below)
