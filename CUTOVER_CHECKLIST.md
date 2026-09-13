@@ -244,9 +244,13 @@ free. Runs fully in parallel until the final step, so nothing is at risk.
 - [x] Supabase Redirect URLs includes `https://app.mazarmartin.com.au/**`.
       Magic link requested from the new domain lands back on it.
 
-## Cutover (remaining — ~15 min, quiet time)
-1. **Supabase Site URL** -> `https://app.mazarmartin.com.au`
-   (Auth -> URL Configuration). Do this AT cutover, not before: the
+- [x] 2026-09-13 20:40 — Supabase Site URL switched to
+      `https://app.mazarmartin.com.au`. Verified with an admin
+      generate_link (unsent): redirect_to is the new domain.
+
+## Cutover (remaining — ~10 min, any quiet evening)
+1. ~~**Supabase Site URL**~~ DONE. (Kept for the record — it had to wait
+   until the announcement was ready because the
    "Send login invite" button, `create_client_user.py` and
    `create_staff_user.py` pass no redirect, so every invite email uses the
    Site URL. Changing it early sends people to a domain nobody announced.
