@@ -410,3 +410,27 @@ migration ~1 hr, not done.)
   side too, not introduced by us).
 
 ### (next session — append below)
+
+### 2026-09-13 — Cloudflare Pages brought up in parallel (hosting cutover prep)
+- Context: GitHub Pages forces a public repo; a real client is now on the
+  app and Scrapfly/Proping are paid feeds, so the code and history need to
+  come off the public web. Cloudflare Pages serves private repos free.
+- Done today (all parallel, nothing cut over): Cloudflare account under the
+  MM email; Pages project connected to `MazarMartin/mm-crm` via the
+  MazarMartin GitHub account (Gerard granted access — cleanly business-owned,
+  no personal-account dependency); live at https://mm-crm.pages.dev; magic
+  link login verified after adding the URL to Supabase redirect allowlist.
+- `build.sh` allowlist (commit on main): Cloudflare publishes only the 8
+  front-end files. Found and excluded `client_report_prototype.html` — an
+  unused prototype with real client data still baked in; a denylist would
+  have kept serving it. Verified pipeline/supabase/docs now unreachable.
+- Remaining: custom domain + Supabase redirect + workflow cleanup + repo
+  private — runbook in CUTOVER_CHECKLIST.md ("Hosting cutover"), to run on
+  the call with Mon.
+- Catch-up note (Jul–Sep, detail in git log): Scrapfly routing + credit
+  preflight; client logins/portal + swipe responses; individual staff logins
+  + org_kv; client data stripped from public HTML; price-change parser
+  regression fix; match-list/brief-filter fixes; Mon's 141 off-markets
+  imported, spreadsheet upload + row editor + enrich-on-reupload.
+
+### (next session — append below)

@@ -215,3 +215,60 @@ Email it, AirDrop it, drop in Drive, whatever's easiest. Done.
 - **Pasting shows weird characters or seems cut off** → don't worry, JSON is one
   long line by design; it's fine.
 - **Anything else** → screen-share with David; he'll do it for you.
+
+---
+
+# Hosting cutover — GitHub Pages → Cloudflare Pages (2026-09)
+
+Why: GitHub Pages (free tier) requires a PUBLIC repo, which exposed the
+scrapers, migrations, git history (incl. old client data) and let anyone
+clone the whole system. Cloudflare Pages serves from a PRIVATE repo for
+free. Runs fully in parallel until the final step, so nothing is at risk.
+
+## Already done (2026-09-13)
+- [x] Cloudflare account under the Mazar Martin email; Pages project `mm-crm`
+      connected to `MazarMartin/mm-crm` via the MazarMartin GitHub account
+      (Gerard granted access). No dependency on David's personal accounts.
+- [x] Build: preset None · command `bash build.sh` · output `_site`.
+      build.sh is an ALLOWLIST — only the 8 front-end files publish; pipeline,
+      supabase/, docs and client_report_prototype.html are unreachable.
+- [x] Parallel URL live and verified: https://mm-crm.pages.dev
+      (app loads, assets resolve at root, magic-link login works).
+- [x] Supabase → Auth → Redirect URLs includes `https://mm-crm.pages.dev/**`
+      (GitHub URL kept; both work at once).
+
+## Cutover (on the call with Mon — ~20 min, quiet time)
+1. **Custom domain** — Cloudflare Pages → mm-crm → Custom domains → add
+   `app.mazarmartin.com.au`. Cloudflare shows a CNAME target
+   (`mm-crm.pages.dev`). Whoever holds mazarmartin.com.au DNS adds ONE
+   record: `app` CNAME → `mm-crm.pages.dev`. Nothing else moves (email etc
+   untouched). Wait for Cloudflare to show the domain Active (cert auto).
+   Done when: https://app.mazarmartin.com.au loads the app over HTTPS.
+2. **Supabase redirect** — add `https://app.mazarmartin.com.au/**` to
+   Auth → URL Configuration → Redirect URLs. Optionally set Site URL to it.
+   Done when: a magic link requested from the new domain lands back on it.
+3. **Tell people** — Gerard, Jeremy, Mon + any client login: new address,
+   and they'll log in once more (sessions are per-domain). Old link keeps
+   working until step 5, so no rush/cliff.
+4. **Workflows** — remove the GitHub Pages deploy steps: delete
+   `.github/workflows/deploy.yml`; in `pipeline.yml` drop the
+   `configure-pages` / `upload-pages-artifact` / `deploy-pages` steps and
+   the `pages:`/`id-token:` permissions + `environment`. The daily job just
+   commits; Cloudflare auto-builds on the push. (David — code change.)
+5. **Repo private** — GitHub → MazarMartin/mm-crm → Settings → Danger zone →
+   Change visibility → Private. GitHub Pages stops (intended). Cloudflare
+   keeps building (its app access survives). Do the same for David's fork.
+   Done when: https://mazarmartin.github.io/mm-crm/ is a 404 and
+   app.mazarmartin.com.au still works after the NEXT nightly run.
+6. **Verify next morning** — Actions run green, Cloudflare deployment green,
+   yesterday's Proping data visible on the new domain.
+
+## Rollback (any point before step 5)
+Nothing to undo — GitHub Pages is still serving. Just don't announce the
+new URL. After step 5: flip the repo back to Public and Pages resumes.
+
+## Not fixed by this (be straight if asked)
+Anything already cloned while the repo was public, and the git history
+itself (old client data in early commits) — a private repo stops NEW
+access; it doesn't retrieve old copies. Scrubbing history is a separate
+decision.
