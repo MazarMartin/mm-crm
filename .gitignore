@@ -25,3 +25,6 @@ pipeline/scripts/.mm_credentials
 
 # Local working notes (private to David's machine)
 ENGAGEMENT_NOTES.md
+
+# Cloudflare Pages build output (assembled by build.sh in the build container)
+_site/
