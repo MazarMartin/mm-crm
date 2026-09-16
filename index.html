@@ -30547,12 +30547,47 @@ const SUBURB_POSTCODES = {
   'greenwich':2065,'longueville':2066,'northwood':2066,
   'riverview':2066,
 };
+// Index of real listing URLs (…/3-14-rawson-street-mosman-nsw-2088-2020757951)
+// keyed by normalised address. Built once per page from every source that
+// carries one: the Domain scrape, sold listings, off-markets, and Proping
+// entries that were enriched with a direct link. A URL containing "?q=" is a
+// search page, not a listing, so it doesn't count.
+let _mmUrlIndex = null;
+function _mmBuildUrlIndex() {
+  const idx = {};
+  const key = (a, s) => (String(a||'').replace(/,.*$/,'') + '|' + String(s||''))
+    .toLowerCase().replace(/[^a-z0-9|]/g, '');
+  const add = (a, s, u) => {
+    if (!a || !u || String(u).includes('?q=')) return;
+    const k = key(a, s);
+    if (k && !idx[k]) idx[k] = u;
+    const ka = key(a, '');           // also index without suburb, for near misses
+    if (ka && !idx[ka]) idx[ka] = u;
+  };
+  for (const l of (D.sampleListings || [])) add(l.address, l.suburb, l.url || l.link);
+  for (const l of (D.soldListings   || [])) add(l.address, l.suburb, l.url || l.link);
+  for (const l of (D.sampleOff      || [])) add(l.address, l.suburb, l.url || l.link);
+  if (typeof propingHistory !== 'undefined') {
+    for (const day of propingHistory) {
+      for (const sec of ['newly_listed','price_changes','sold','auction_changes','unlisted','over_90_days']) {
+        for (const e of (day[sec] || [])) add(e.address, e.suburb, e.url || e.domain_url);
+      }
+    }
+  }
+  return idx;
+}
+
 function domainUrl(address, suburb, type) {
-  // Canonical Domain URLs require a numeric listing ID (e.g. -2020000608) that
-  // we cannot reliably synthesise. Return a Domain search URL that always
-  // resolves to the correct property when clicked.
+  // Prefer the actual listing page when we know it. Domain listing URLs need a
+  // numeric ID we can't synthesise, but the Domain scrape supplies them for
+  // most properties, so match on address first. Falls back to a Domain search,
+  // which always resolves to the right property but lands on a results page.
   const a = (address||'').replace(/,.*$/,'').trim();
   const s = (suburb||'').trim();
+  if (!_mmUrlIndex) { try { _mmUrlIndex = _mmBuildUrlIndex(); } catch (e) { _mmUrlIndex = {}; } }
+  const norm = (x) => String(x||'').toLowerCase().replace(/[^a-z0-9|]/g, '');
+  const direct = _mmUrlIndex[norm(a + '|' + s)] || _mmUrlIndex[norm(a + '|')];
+  if (direct) return direct;
   const q = [a, s, 'NSW', 'Australia'].filter(Boolean).join(', ');
   const base = (type === 'sold') ? 'https://www.domain.com.au/sold-listings/'
                                  : 'https://www.domain.com.au/sale/';
@@ -31191,7 +31226,7 @@ function buildAuctionSnapshot() {
                 guide: p.price || '',
                 date: dt,
                 detail: p.auction_date || p.auctionDetail || '',
-                url: p.domain_url || domainUrl(p.address||'', p.suburb||''),
+                url: domainUrl(p.address||'', p.suburb||''),
                 cancelled: _cancelledAddrs.has(k),
               });
             }
@@ -31352,7 +31387,7 @@ function buildAuctionSnapshot() {
         const badge = isRemoved
           ? '<span class="badge badge-red" style="font-size:9px">REMOVED</span>'
           : '<span class="badge badge-orange" style="font-size:9px">MOVED</span>';
-        const url = ac.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((ac.address||'') + ', NSW, Australia'));
+        const url = domainUrl(ac.address||'', ac.suburb||'');
         h += `<tr style="${strike}">
           <td style="font-weight:600"><a href="${url}" target="_blank" style="color:inherit">${ac.address||'—'}</a></td>
           <td><span class="suburb-pill">${ac.suburb||''}</span></td>
@@ -31566,7 +31601,7 @@ function buildDashboard() {
     else if (type === 'am') t += '<th>Details</th><th>Agent</th>';
     t += '</tr></thead><tbody>';
     items.slice(0, 50).forEach(p => {
-      const url = p.domain_url || '';
+      const url = domainUrl(p.address||'', p.suburb||'');
       const addrLink = url ? '<a href="' + url + '" target="_blank" style="color:inherit"><strong>' + (p.address||'—') + '</strong></a>' : '<strong>' + (p.address||'—') + '</strong>';
       t += '<tr><td style="font-size:12px">' + addrLink + '</td>';
       t += '<td style="font-size:12px"><span class="suburb-pill">' + (p.suburb||'') + '</span></td>';
@@ -33826,6 +33861,70 @@ function editClient(btn, name) {
   _createSuburbPicker(pickerId, name, merged.locations||'');
 }
 
+// Rename a client everywhere. The client's NAME is the key that ties together
+// their notes, presented properties, saved matches, dismissals, activity,
+// temperature and swipe responses, so a rename has to move all of it or the
+// history is orphaned under the old name.
+//
+// Order matters: the database row is renamed FIRST. The sync layer resolves
+// each local store by client name and creates a row for a name it doesn't
+// recognise, so renaming locally first would spawn a duplicate client and
+// strand everything attached to the original.
+const _MM_CLIENT_NAME_KEYS = [
+  'mmClientEdits', 'mmPresented', 'mmSavedMatches', 'mmDismissedProps',
+  'mmClientComments', 'mmClientActivity', 'mmBuyerTemp', 'mmClientResponses',
+  'mmBuyerTemps', 'mmTemps',
+];
+
+async function renameClient(oldName) {
+  if (window.mmUserRole === 'client') return;
+  const input = prompt('Edit client name:', oldName);
+  if (input === null) return;
+  const newName = input.trim();
+  if (!newName || newName === oldName) return;
+
+  const existing = (D.xlsxClients || []).map(c => (c.name || '').toLowerCase());
+  if (existing.includes(newName.toLowerCase())) {
+    alert('There is already a client called "' + newName + '". Pick a different name.');
+    return;
+  }
+  if (typeof window.mmRenameClient !== 'function') {
+    alert('Cannot rename right now — the app is not connected to the database. Refresh and sign in, then try again.');
+    return;
+  }
+
+  const res = await window.mmRenameClient(oldName, newName);
+  if (!res || !res.ok) {
+    alert('Rename failed: ' + ((res && res.error) || 'unknown error') + '\n\nNothing was changed.');
+    return;
+  }
+
+  // Database is renamed; now move every local store onto the new key.
+  for (const key of _MM_CLIENT_NAME_KEYS) {
+    const map = lsGet(key, {});
+    if (map && typeof map === 'object' && !Array.isArray(map) && (oldName in map)) {
+      map[newName] = map[oldName];
+      delete map[oldName];
+      lsSet(key, map);
+    }
+  }
+  const deleted = lsGet('mmDeletedClients', []);
+  if (Array.isArray(deleted) && deleted.includes(oldName)) {
+    lsSet('mmDeletedClients', deleted.map(n => (n === oldName ? newName : n)));
+  }
+  const rosterEntry = (D.xlsxClients || []).find(c => c.name === oldName);
+  if (rosterEntry) rosterEntry.name = newName;
+  if (Array.isArray(window.MM_CLIENTS)) {
+    const mc = window.MM_CLIENTS.find(c => c.name === oldName);
+    if (mc) mc.name = newName;
+  }
+
+  showToast('Renamed to ' + newName);
+  try { closeClientProfile(); } catch (e) {}
+  try { buildClientsTab(); } catch (e) {}
+  try { openClientProfile(newName); } catch (e) {}
+}
+
 function saveClientEdit(name, field, value) {
   const edits = lsGet('mmClientEdits', {});
   if (!edits[name]) edits[name] = {};
@@ -34344,7 +34443,9 @@ function openClientProfile(clientName) {
     <div class="pir-head">
       <div>
         <h2>Client Report</h2>
-        <div class="pir-addr">${name}</div>
+        <div class="pir-addr">${name}${window.mmUserRole === 'client' ? '' : `
+          <button onclick="renameClient('${_eName}')" title="Edit this client's name"
+            style="background:none;border:none;color:rgba(255,255,255,0.55);cursor:pointer;font-size:13px;padding:0 0 0 8px">✎</button>`}</div>
         <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:2px">${status} Buyer · Managed by ${ba}</div>
       </div>
       <button class="pir-close" onclick="closeClientProfile()">&times;</button>
@@ -36971,7 +37072,7 @@ function _collectRecentSold(days) {
 }
 
 function _propingLink(p) {
-  const url = p.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((p.address||'') + ', NSW, Australia'));
+  const url = domainUrl(p.address||'', p.suburb||'');
   return `<a href="${url}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${p.address||'—'}</a>`;
 }
 
@@ -37145,7 +37246,7 @@ function _normSoldKey(address, suburb) {
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildForSaleTab() {
   const el = document.getElementById('page-forsale');
-  const suburbs = [...new Set((D.sampleListings||[]).map(l=>l.suburb))].sort();
+  const suburbs = [...new Set((D.sampleListings||[]).map(l=>_mmCleanSuburb(l.suburb)).filter(Boolean))].sort();
   const types = [...new Set((D.sampleListings||[]).map(l=>l.propertyType||l.type||''))].filter(Boolean).sort();
   const userAdded = lsGet('mmNewSale', []);
   const all = [...(D.sampleListings||[]), ...userAdded];
@@ -37188,7 +37289,7 @@ function filterForSale() {
   const userAdded = lsGet('mmNewSale', []);
   const deletedFS = new Set(lsGet('mmDeletedFS', []));
   let items = [...(D.sampleListings||[]), ...userAdded].filter(l => !deletedFS.has((l.address||'').toLowerCase().replace(/[^a-z0-9]/g,'')));
-  if (sub) items = items.filter(l => l.suburb === sub);
+  if (sub) items = items.filter(l => _mmCleanSuburb(l.suburb) === sub);
   if (propType) items = items.filter(l => (l.propertyType||l.type||'') === propType);
   if (beds) items = items.filter(l => parseInt(l.beds||0) >= beds);
   if (q) items = items.filter(l => (l.address||'').toLowerCase().includes(q) || (l.agentNames||'').toLowerCase().includes(q) || (l.agencyName||'').toLowerCase().includes(q) || (l.propertyType||l.type||'').toLowerCase().includes(q));
@@ -37409,6 +37510,36 @@ function addNewSale() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // OFF MARKET TAB
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── Suburb tidy-up ─────────────────────────────────────────────────────
+// Off-market emails, agency scrapes and the old CRM export all leak rubbish
+// into the suburb field: sign-offs captured by the address parser
+// ("Mosman\nKind Regards"), stray address lines ("ACCESS VIA GROSVENOR
+// LANE") and misspellings ("Northbirgde", "Nuetral Bay"). scrape_gmail.py
+// now cleans this at the source, but data already stored keeps its old
+// values, so the app tidies on display too. Mirrors clean_suburb() there.
+const _MM_SUBURB_FIXES = {
+  'northbirgde': 'Northbridge', 'north bridge': 'Northbridge',
+  'nuetral bay': 'Neutral Bay', 'netural bay': 'Neutral Bay',
+  'cremornepoint': 'Cremorne Point', 'cremorne pt': 'Cremorne Point',
+  'nth sydney': 'North Sydney', 'crowsnest': 'Crows Nest',
+  'st leonard': 'St Leonards', 'mcmahons pt': 'McMahons Point',
+  'kurraba pt': 'Kurraba Point',
+};
+const _MM_SUBURB_STOP = /\b(kind regards|regards|best regards|cheers|thanks|thank you|sincerely|bed|bedroom|bath|bathroom|car|parking|price|guide|contact|call|please|sent from|confidential|access via)\b/i;
+
+function _mmCleanSuburb(s) {
+  if (!s) return '';
+  let v = String(s).replace(/\\n/g, '\n').replace(/\\r/g, '\r').split(/[\r\n]/)[0];
+  const stop = v.match(_MM_SUBURB_STOP);
+  if (stop) v = v.slice(0, stop.index);
+  v = v.replace(/[^A-Za-z\s'-]/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[-']+|[-']+$/g, '');
+  if (!v) return '';
+  const low = v.toLowerCase();
+  if (_MM_SUBURB_FIXES[low]) return _MM_SUBURB_FIXES[low];
+  if (low.length < 3 || low.split(' ').length > 3) return '';
+  return low.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 function buildOffMarketTab() {
   const el = document.getElementById('page-offmarket');
   const emailOff = (typeof emailOffMarkets !== 'undefined' ? emailOffMarkets : []).map(e => ({
@@ -37416,7 +37547,8 @@ function buildOffMarketTab() {
     price: e.price||'', comments: (e.notes||'') + (e.agency ? ' ['+e.agency+']' : ''),
     source: 'email', beds: e.beds||'', baths: e.baths||'', cars: e.cars||''
   }));
-  const suburbs = [...new Set([...(D.sampleOff||[]).map(l=>l.suburb), ...emailOff.map(l=>l.suburb)])].sort();
+  const suburbs = [...new Set([...(D.sampleOff||[]), ...emailOff, ...lsGet('mmNewOff', [])]
+    .map(l => _mmCleanSuburb(l.suburb)).filter(Boolean))].sort();
   const types = [...new Set([...(D.sampleOff||[]).map(l=>l.propertyType||l.type||''), ...emailOff.map(l=>l.propertyType||l.type||'')])].filter(Boolean).sort();
   const userAdded = lsGet('mmNewOff', []);
   const all = [...(D.sampleOff||[]), ...emailOff, ...userAdded];
@@ -37517,7 +37649,7 @@ function filterOffMarket() {
     propertyType: e.propertyType||e.type||''
   }));
   let items = [...(D.sampleOff||[]), ...emailOff, ...userAdded];
-  if (sub) items = items.filter(l => l.suburb === sub);
+  if (sub) items = items.filter(l => _mmCleanSuburb(l.suburb) === sub);
   if (propType) items = items.filter(l => (l.propertyType||l.type||'') === propType);
   if (beds) items = items.filter(l => parseInt(l.beds||0) >= beds);
   if (q) items = items.filter(l => (l.address||'').toLowerCase().includes(q) || (l.agent||'').toLowerCase().includes(q) || (l.suburb||'').toLowerCase().includes(q) || (l.propertyType||l.type||'').toLowerCase().includes(q));
@@ -38105,7 +38237,7 @@ function runBuyerMatch() {
 // ═══════════════════════════════════════════════════════════════════════════════
 function buildSoldTab() {
   const el = document.getElementById('page-sold');
-  const suburbs = [...new Set((D.soldListings||[]).map(l=>l.suburb))].sort();
+  const suburbs = [...new Set((D.soldListings||[]).map(l=>_mmCleanSuburb(l.suburb)).filter(Boolean))].sort();
   const types = [...new Set((D.soldListings||[]).map(l=>l.propertyType||l.type||''))].filter(Boolean).sort();
 
   el.innerHTML = `
@@ -38160,7 +38292,7 @@ function filterSold() {
   const edits = lsGet('mmSoldEdits', {});
 
   let items = [...(D.soldListings||[])];
-  if (sub) items = items.filter(l => l.suburb === sub);
+  if (sub) items = items.filter(l => _mmCleanSuburb(l.suburb) === sub);
   if (propType) items = items.filter(l => (l.propertyType||l.type||'') === propType);
   if (beds) items = items.filter(l => parseInt(l.beds||0) >= beds);
   if (method) items = items.filter(l => (l.method||'') === method);
@@ -38226,7 +38358,11 @@ function buildTopPerformersTab() {
 
   el.innerHTML = `
     <div class="page-title">Top Performers</div>
-    <div class="page-sub">Highest-ranked agents by call priority score</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="page-sub" style="margin:0">Highest-ranked agents by call priority score</div>
+      <button class="btn-sm btn-outline" onclick="resetCallChecklist()"
+        title="Clear every call, voicemail and note so the list is fresh for a new week">↺ Start new week</button>
+    </div>
     <div class="table-wrap"><table><thead><tr>
       <th style="text-align:center">Score</th><th>Name</th><th>Agency</th><th>Email</th><th>Suburb</th><th style="text-align:center">Sales</th><th style="text-align:center">For Sale</th><th style="text-align:center">Called</th><th style="text-align:center">VM</th><th>Notes</th><th>Profile</th>
     </tr></thead><tbody id="tp-tbody"></tbody></table></div>
@@ -38312,6 +38448,30 @@ function filterAllAgents() {
   });
 }
 
+// The Top Performers list doubles as the weekly agent-calling checklist.
+// Deliberately a manual button rather than an automatic Monday wipe: the team
+// wanted to decide when a week starts, and an automatic reset would silently
+// destroy notes if someone worked through a weekend. Clears the shared
+// org-wide state, so it resets for everyone, hence the confirm with counts.
+function resetCallChecklist() {
+  const status = lsGet('mmCallStatus', {});
+  const comments = lsGet('mmCallComments', {});
+  let called = 0, vm = 0;
+  for (const s of Object.values(status)) { if (s && s.called) called++; if (s && s.vm) vm++; }
+  const notes = Object.values(comments).filter(v => String(v || '').trim()).length;
+  if (!called && !vm && !notes) { showToast('Checklist is already clear'); return; }
+  const parts = [];
+  if (called) parts.push(called + ' call' + (called === 1 ? '' : 's'));
+  if (vm) parts.push(vm + ' voicemail' + (vm === 1 ? '' : 's'));
+  if (notes) parts.push(notes + ' note' + (notes === 1 ? '' : 's'));
+  if (!confirm('Start a new week?\n\nThis clears ' + parts.join(', ') + ' for everyone on the team. It cannot be undone.')) return;
+  lsSet('mmCallStatus', {});
+  lsSet('mmCallComments', {});
+  showToast('Checklist cleared — ready for a new week');
+  try { buildTopPerformersTab(); } catch (e) {}
+  try { buildAllAgentsTab(); } catch (e) {}
+}
+
 function toggleAgentCall(key) {
   const s = lsGet('mmCallStatus', {}); if (!s[key]) s[key]={}; s[key].called = !s[key].called;
   lsSet('mmCallStatus', s);
@@ -38336,7 +38496,7 @@ function saveAgentComment(key, value) {
 // PROPING TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function propAddrLink(p) {
-  const url = p.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((p.address||'') + ', NSW, Australia'));
+  const url = domainUrl(p.address||'', p.suburb||'');
   return `<a href="${url}" target="_blank" rel="noopener">${p.address}</a>`;
 }
 
@@ -41440,7 +41600,7 @@ document.addEventListener('keydown', (e) => {
 
 // ── Proping Tab ──────────────────────────────────────────────────────────────
 function propAddrLink(p) {
-  const url = p.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((p.address||'') + ', NSW, Australia'));
+  const url = domainUrl(p.address||'', p.suburb||'');
   return `<a href="${url}" target="_blank" rel="noopener">${p.address}</a>`;
 }
 
@@ -50872,7 +51032,7 @@ function renderEmailOff(pg) {
 
 // ── Proping Tab ──────────────────────────────────────────────────────────────
 function propAddrLink(p) {
-  const url = p.domain_url || ('https://www.domain.com.au/sale/?q=' + encodeURIComponent((p.address||'') + ', NSW, Australia'));
+  const url = domainUrl(p.address||'', p.suburb||'');
   return `<a href="${url}" target="_blank" rel="noopener">${p.address}</a>`;
 }
 

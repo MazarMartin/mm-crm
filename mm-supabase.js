@@ -960,6 +960,35 @@ function installFocusRehydrate() {
   // Expose a manual hook so in-app refresh buttons (e.g. "Refresh Matches" on
   // the Clients tab) can pull fresh data from Supabase on demand. Bypasses
   // the 10s throttle since it's a deliberate user action.
+  // Rename a client in the database. MUST run before the app renames its
+  // local name-keyed stores: those sync through resolveClientId(name), which
+  // CREATES a row for an unknown name. Renaming the row first means the new
+  // name already resolves to the existing client, so notes, presented
+  // properties, matches and swipe responses (all keyed by client_id) stay
+  // attached instead of being orphaned under a duplicate record.
+  // Returns {ok:true} or {ok:false, error:'...'}.
+  window.mmRenameClient = async function renameClient(oldName, newName) {
+    if (!currentOrgId) return { ok: false, error: 'not signed in' };
+    oldName = String(oldName || '').trim();
+    newName = String(newName || '').trim();
+    if (!oldName || !newName) return { ok: false, error: 'name cannot be empty' };
+    if (oldName === newName) return { ok: true };
+    try {
+      const { data: clash } = await supabase.from('clients')
+        .select('id').eq('org_id', currentOrgId).eq('name', newName).maybeSingle();
+      if (clash) return { ok: false, error: 'a client called "' + newName + '" already exists' };
+      const { data, error } = await supabase.from('clients')
+        .update({ name: newName })
+        .eq('org_id', currentOrgId).eq('name', oldName)
+        .select('id');
+      if (error) return { ok: false, error: error.message };
+      if (!data || !data.length) return { ok: false, error: 'no client called "' + oldName + '" in the database' };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e && e.message || e) };
+    }
+  };
+
   window.mmRehydrate = async function manualRehydrate(reason) {
     if (!currentOrgId) return;
     const saved = lastHydrateAt;

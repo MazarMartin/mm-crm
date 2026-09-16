@@ -91,6 +91,66 @@ LNS_SUBURBS = [
     'cremorne point', 'clifton gardens',
 ]
 
+# Misspellings and run-together forms seen in real agent emails. Mapped to the
+# canonical spelling so the Off Market suburb dropdown doesn't sprout variants.
+_SUBURB_FIXES = {
+    'northbirgde': 'northbridge', 'north bridge': 'northbridge',
+    'nuetral bay': 'neutral bay', 'netural bay': 'neutral bay',
+    'cremornepoint': 'cremorne point', 'cremorne pt': 'cremorne point',
+    'nth sydney': 'north sydney', 'crowsnest': 'crows nest',
+    'st leonard': 'st leonards', 'mcmahons pt': 'mcmahons point',
+    'kurraba pt': 'kurraba point',
+}
+
+# Words that mark the end of an address in an email: a sign-off or the start of
+# the property blurb. Agent emails run these straight on after the suburb, and
+# because the address pattern allowed newlines they used to be captured as part
+# of the suburb ("Mosman\nKind Regards").
+_ADDR_STOP = re.compile(
+    r'\b(kind regards|regards|best regards|cheers|thanks|thank you|sincerely|'
+    r'bed|bedroom|bath|bathroom|car|parking|price|guide|contact|call|'
+    r'please|hi |hello |dear |sent from|confidential)\b', re.I)
+
+
+def clean_suburb(s):
+    """Normalise a suburb parsed out of an email.
+
+    Cuts at the first newline or sign-off word, strips punctuation, corrects
+    known misspellings, and title-cases. Returns '' if nothing usable is left,
+    which is better than showing junk in the suburb dropdown.
+    """
+    if not s:
+        return ''
+    s = str(s).replace('\\n', '\n').replace('\\r', '\r')
+    s = re.split(r'[\r\n]', s)[0]
+    m = _ADDR_STOP.search(s)
+    if m:
+        s = s[:m.start()]
+    s = re.sub(r'[^A-Za-z\s\'-]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip(" -'")
+    if not s:
+        return ''
+    low = s.lower()
+    low = _SUBURB_FIXES.get(low, low)
+    if low not in LNS_SUBURBS:
+        # Allow genuine out-of-area suburbs through, but reject leftovers that
+        # are clearly not a place name (too long, or a single stray letter).
+        if len(low) < 3 or len(low.split()) > 3:
+            return ''
+    return ' '.join(w.capitalize() for w in low.split())
+
+
+def clean_address(a):
+    """Trim an address at a sign-off/blurb word and collapse whitespace."""
+    if not a:
+        return ''
+    a = str(a).replace('\\n', '\n').replace('\\r', '\r')
+    a = re.split(r'[\r\n]', a)[0]
+    m = _ADDR_STOP.search(a)
+    if m:
+        a = a[:m.start()]
+    return re.sub(r'\s+', ' ', a).strip(' ,.-')
+
 
 class HTMLStripper(HTMLParser):
     """Strip HTML tags and return plain text.
@@ -591,16 +651,19 @@ def parse_offmarket_email(subject, body, sender_name, sender_email, date_str):
         r'(\d+[A-Za-z]?[/\d]*\s+[A-Z][a-zA-Z\s\']+(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr'
         r'|Lane|Ln|Place|Pl|Court|Ct|Way|Close|Cl|Crescent|Cres|Boulevard|Blvd|Parade|Pde'
         r'|Highway|Hwy|Terrace|Tce|Circuit|Cct|Walk|Grove|Track|Ridge|Glen|Rise|View|Row)'
-        r'[\.,]?\s*[A-Z][a-zA-Z\s]+)',
+        # [^\S\n] = whitespace but NOT a newline. With plain \s the suburb ran on
+        # into the next line of the email, producing "Mosman\nKind Regards".
+        r'[\.,]?[^\S\n]*[A-Z][a-zA-Z\' -]+)',
         combined
     )
     if addr_m:
         addr = addr_m.group(1).strip().rstrip(',').strip()
         addr = re.sub(r'\s+(?:NSW|VIC|QLD|SA|WA|TAS|ACT|NT)\s*\d*$', '', addr).strip()
+        addr = clean_address(addr)
         prop['address'] = addr
         parts = addr.split(',')
         if len(parts) > 1:
-            prop['suburb'] = parts[-1].strip()
+            prop['suburb'] = clean_suburb(parts[-1])
 
     # Property type
     type_patterns = [
@@ -922,6 +985,13 @@ def scan_gmail(days=DEFAULT_SCAN_DAYS, proping_only=False, offmarket_only=False)
 
         def norm(addr):
             return re.sub(r'[^a-z0-9]', '', (addr or '').lower())
+
+        # Repair entries saved before the address/suburb parsing was fixed, so
+        # old junk ("Mosman\nKind Regards") disappears from the app instead of
+        # being carried forward forever by this merge.
+        for e in existing:
+            e['address'] = clean_address(e.get('address'))
+            e['suburb'] = clean_suburb(e.get('suburb'))
 
         existing_addrs = {norm(e.get('address', '')) for e in existing if e.get('address')}
         new_off = [e for e in offmarket_entries if norm(e.get('address', '')) not in existing_addrs]
