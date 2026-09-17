@@ -451,4 +451,37 @@ migration ~1 hr, not done.)
   listings, but Domain is still the only source for property type and for
   the full For Sale / Sold inventory. Still needed, smaller role.
 
+### 2026-09-17 — Meeting follow-ups (16 Sep call with Mon) + a months-old data corruption found
+Built from the meeting list:
+- Quick wins (earlier today): suburb dropdown cleanup, real listing links,
+  Top Performers "Start new week" reset, client rename.
+- Data health alerts: `health_check.py` after every run; emails
+  david@tavoautomation.com on new/changed problems (Proping recency and
+  parsing, Scrapfly pages/credits, scrapers refreshing, off-market emails
+  quiet, For Sale stale), RESOLVED on clear, summary every 2nd Monday.
+- Parallel Scrapfly (4 at a time) + stats file; nightly moved to 19:17 UTC.
+- `catchup.yml` 11:37/15:37 AEST: rebuild from email only if new staff mail
+  arrived since the last run (late Proping emails no longer wait a day).
+- Off-market emails: staff forwards with an address count as leads; agent
+  credited from the quoted header; saved junk repaired every run; email cap
+  500 -> 3000. Their side: agent emails mostly aren't being forwarded at all
+  (3 non-Proping staff emails since 4 May) — needs a habit or Outlook rule.
+- Sold prices typed on the Sold tab now show everywhere.
+- Client view narrowed to the client's brief (all tabs + dashboard).
+- ShadeMap ☀ link on properties.
+
+Found while testing client filtering — pre-existing, from the original Mac
+pipeline: the five fill_* scripts matched addresses on any shared word incl.
+the suburb, copying details between unrelated properties. Worst case
+fill_sold_prices (no suburb check): since 10 Apr, $800,000 written onto 223
+sold properties, $1,568,000 onto 110, "Auction Guide $11,000,000" onto 588.
+All 251 Mosman Proping listings typed "Apartment". Fixed with
+`addr_match.py`; `repair_copied_prices.py` reverts the copied prices using
+the 10 Apr data as baseline (dry run: 384 reverted, 133 cleared, 16 kept,
+982 copied guides cleared). Not repairable without original Domain data:
+type/baths/car/land filled since April on For Sale and Sold lists.
+- Still open: exact vs potential matches (decision); For Sale inventory
+  loader (dry run first); retire old URL + repo private (awaiting client
+  confirmation + David's GitHub 2FA).
+
 ### (next session — append below)

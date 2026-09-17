@@ -261,7 +261,7 @@ free. Runs fully in parallel until the final step, so nothing is at risk.
    fresh login (sessions are per-domain). Anyone who installed the GitHub
    version as a desktop app should uninstall it and reinstall from the new
    address. Old link keeps working until step 4.
-3. **Workflows** — delete `.github/workflows/deploy.yml`; in `pipeline.yml`
+3. **Workflows** — delete `.github/workflows/deploy.yml`; in `pipeline.yml` AND `catchup.yml`
    drop `configure-pages` / `upload-pages-artifact` / `deploy-pages`, the
    `pages:` + `id-token:` permissions and the `environment` block. Daily job
    just commits; Cloudflare builds on push. (David — code change.)
