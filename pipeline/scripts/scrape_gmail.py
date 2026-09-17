@@ -51,7 +51,9 @@ KEYCHAIN_SERVICE = 'mm-gmail-imap'
 
 # Scan settings
 DEFAULT_SCAN_DAYS = 90
-MAX_EMAILS = 500
+# Was 500, but 90 days of mail already holds 600+ (three staff each forward
+# every Proping alert), so the oldest were silently skipped.
+MAX_EMAILS = 3000
 
 # ── Off-market keywords ──
 OFFMARKET_SUBJECT_KW = [
@@ -68,6 +70,9 @@ OFFMARKET_SUBJECT_KW = [
     'first look', 'sneak peek', 'sneak preview',
     'not yet on domain', 'not yet advertised',
     'pre listing', 'pre-listing',
+    # Added Sep 2026 after real agent emails slipped through:
+    'preview', 'pre-launch', 'prelaunch', 'about to list', 'soon to be listed',
+    'new listing coming', 'coming to market',
 ]
 
 OFFMARKET_BODY_KW = [
@@ -78,6 +83,10 @@ OFFMARKET_BODY_KW = [
     'quietly available', 'not on the open market',
     'owner is open to', 'owner willing to sell',
     'vendor has agreed to sell', 'vendor happy to sell privately',
+    # Added Sep 2026:
+    'before we launch', 'launches more broadly', 'soon to be listed',
+    'about to list', 'prior to launch', 'not yet on the market',
+    'before it goes live', 'before it hits domain', 'before it hits realestate',
 ]
 
 # LNS suburbs
@@ -354,6 +363,69 @@ def is_offmarket_email(subject, body):
         if kw in b:
             return True
     return False
+
+
+# Staff forward agent emails into this inbox on purpose. A forwarded email
+# that names a street address is treated as an off-market lead even if the
+# agent didn't use one of the phrases above: on 16 Sep 2026 Gerard forwarded
+# "Magnificent Family Entertainer in Northbridge" (a McGrath preview of
+# 34 Baringa Road) and the keyword check silently missed it.
+STAFF_SENDER_RE = re.compile(r'@mazarmartin\.com\.au\s*$|^gerardmazar@', re.I)
+
+# Forwards of ordinary public listings shouldn't land on the Off Market tab.
+PUBLIC_LISTING_PHRASES = (
+    'just listed', 'now on the market', 'new to market', 'open home',
+    'open for inspection', 'auction on site',
+)
+
+# Suburbs recognised at the end of an address that has no comma
+# ("2 Warrawee Ave Castle Cove"), so the suburb isn't left blank.
+_EXTRA_SUBURBS = [
+    'castle cove', 'middle cove', 'roseville', 'roseville chase', 'lindfield',
+    'killara', 'gordon', 'pymble', 'seaforth', 'balgowlah', 'manly',
+    'henley', 'huntleys cove', 'north willoughby', 'willoughby east',
+    'beauty point', 'spit junction', 'lane cove north', 'lane cove west',
+    'chatswood west', 'gladesville', 'north ryde',
+]
+
+
+def is_staff_forward(sender_email):
+    return bool(sender_email and STAFF_SENDER_RE.search(sender_email.strip()))
+
+
+def looks_public_listing(subject, body):
+    s = (subject or '').lower()
+    b = (body or '')[:3000].lower()
+    return any(p in s for p in PUBLIC_LISTING_PHRASES) or 'just listed' in b
+
+
+def forwarded_original_sender(body):
+    """The agent's name and address from a forwarded email's quoted header.
+
+    Outlook:  From: Gavan Allen <gavan.allen@mcgrath.com.au>
+    Gmail:    From: Gavan Allen <gavan.allen@mcgrath.com.au>  (after "Forwarded message")
+    Skips staff addresses, so a forward-of-a-forward still finds the agent.
+    """
+    pat = re.compile(
+        r'^[ \t>*]*From:\*?[ \t]*"?([^"<\[\n\r]*?)"?[ \t]*[<\[][ \t]*(?:mailto:)?'
+        r'([^>\]\s]+@[^>\]\s]+)[ \t]*[>\]]', re.M | re.I)
+    for m in pat.finditer(body or ''):
+        name, addr = m.group(1).strip(' *'), m.group(2).strip()
+        if not STAFF_SENDER_RE.search(addr):
+            return name, addr
+    return '', ''
+
+
+def trailing_suburb(addr):
+    """('Castle Cove', '2 Warrawee Ave') for '2 Warrawee Ave Castle Cove'."""
+    a = (addr or '').strip().rstrip(' ,.')
+    low = a.lower()
+    for sb in sorted(set(LNS_SUBURBS + _EXTRA_SUBURBS), key=len, reverse=True):
+        if low.endswith(' ' + sb):
+            street = a[:len(a) - len(sb)].rstrip(' ,')
+            if re.search(r'\d', street):
+                return ' '.join(w.capitalize() for w in sb.split()), street
+    return '', a
 
 
 def parse_proping_email(subject, body, date_str):
@@ -644,6 +716,15 @@ def parse_offmarket_email(subject, body, sender_name, sender_email, date_str):
         'sender_email': sender_email,
     }
 
+    # A staff forward: credit the agent who wrote the original email, not the
+    # staff member who forwarded it ("which agents to call" depends on this).
+    if is_staff_forward(sender_email):
+        orig_name, orig_email = forwarded_original_sender(body)
+        if orig_email:
+            prop['agent'] = orig_name or prop['agent']
+            prop['forwarded_by'] = sender_name
+            sender_email = orig_email
+
     combined = (subject or '') + '\n' + (body or '')
 
     # Address
@@ -664,6 +745,11 @@ def parse_offmarket_email(subject, body, sender_name, sender_email, date_str):
         parts = addr.split(',')
         if len(parts) > 1:
             prop['suburb'] = clean_suburb(parts[-1])
+        if not prop['suburb']:
+            sub, street = trailing_suburb(addr)
+            if sub:
+                prop['suburb'] = sub
+                prop['address'] = f'{street}, {sub}'
 
     # Property type
     type_patterns = [
@@ -714,7 +800,9 @@ def parse_offmarket_email(subject, body, sender_name, sender_email, date_str):
         if agency.lower() in combined.lower():
             prop['agency'] = agency
             break
-    if not prop['agency'] and sender_email:
+    # Never name our own firm as the agency (staff sometimes type the details
+    # themselves rather than forwarding the agent's email).
+    if not prop['agency'] and sender_email and not is_staff_forward(sender_email):
         domain = sender_email.split('@')[-1].split('.')[0] if '@' in sender_email else ''
         if domain and len(domain) > 2:
             prop['agency'] = domain.title()
@@ -899,6 +987,15 @@ def scan_gmail(days=DEFAULT_SCAN_DAYS, proping_only=False, offmarket_only=False)
                 else:
                     print(f"  ⚠️  Off-market email (no address): {subject[:60]}")
                 seen.add(msg_id_str)
+            elif (not proping_only and is_staff_forward(sender_email)
+                  and not looks_public_listing(subject, body)):
+                prop = parse_offmarket_email(subject, body, sender_name, sender_email, date_str)
+                if prop['address']:
+                    prop['notes'] = (prop.get('notes', '') + ' [forwarded by staff]').strip()
+                    print(f"  🏠 Off-market (staff forward): {prop['address']} ({date_str})")
+                    print(f"     agent: {prop.get('agent') or '?'} | forwarded by {sender_name}")
+                    offmarket_entries.append(prop)
+                seen.add(msg_id_str)
 
         except Exception as e:
             errors += 1
@@ -975,29 +1072,34 @@ def scan_gmail(days=DEFAULT_SCAN_DAYS, proping_only=False, offmarket_only=False)
     else:
         print(f"  Proping reports: 0")
 
-    if offmarket_entries:
-        # Merge with existing (dedup by address)
-        existing = []
-        if OFFMARKET_OUT.exists():
-            try:
-                existing = json.loads(OFFMARKET_OUT.read_text())
-            except: pass
+    # Merge with what's already saved (dedup by address). Runs even when this
+    # scan found nothing new: otherwise repairs to entries saved earlier never
+    # reach the app (the "Kind Regards" addresses stayed live for exactly that
+    # reason, and their emails are now outside the 90-day scan window).
+    existing = []
+    if OFFMARKET_OUT.exists():
+        try:
+            existing = json.loads(OFFMARKET_OUT.read_text())
+        except Exception:
+            existing = []
 
-        def norm(addr):
-            return re.sub(r'[^a-z0-9]', '', (addr or '').lower())
+    def norm(addr):
+        return re.sub(r'[^a-z0-9]', '', (addr or '').lower())
 
-        # Repair entries saved before the address/suburb parsing was fixed, so
-        # old junk ("Mosman\nKind Regards") disappears from the app instead of
-        # being carried forward forever by this merge.
-        for e in existing:
-            e['address'] = clean_address(e.get('address'))
-            e['suburb'] = clean_suburb(e.get('suburb'))
+    for e in existing:
+        e['address'] = clean_address(e.get('address'))
+        e['suburb'] = clean_suburb(e.get('suburb'))
+        if not e['suburb']:
+            sub, street = trailing_suburb(e['address'])
+            if sub:
+                e['suburb'], e['address'] = sub, f'{street}, {sub}'
 
+    if offmarket_entries or existing:
         existing_addrs = {norm(e.get('address', '')) for e in existing if e.get('address')}
         new_off = [e for e in offmarket_entries if norm(e.get('address', '')) not in existing_addrs]
         all_off = new_off + existing
         OFFMARKET_OUT.write_text(json.dumps(all_off, indent=2, ensure_ascii=False))
-        print(f"  Off-market: {len(offmarket_entries)} found, {len(new_off)} new")
+        print(f"  Off-market: {len(offmarket_entries)} found, {len(new_off)} new, {len(all_off)} saved")
         print(f"  Saved → {OFFMARKET_OUT}")
     else:
         print(f"  Off-market: 0")
