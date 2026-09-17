@@ -1,5 +1,9 @@
 import json, re
 from pathlib import Path
+# Strict same-property matching (see addr_match.py). The old rule matched any
+# shared word, including the suburb, so details were copied between
+# unrelated properties in the same suburb.
+from addr_match import AddressIndex
 
 _DL = Path(__file__).resolve().parent.parent
 
@@ -16,23 +20,12 @@ app = json.loads(m.group(1))
 domain = json.load(open(_DL / 'domain_forsale_lns.json'))
 
 filled = 0
+domain_index = AddressIndex(domain)
 for p in app:
     if p.get('propertyType') and p.get('baths') and p.get('parking'):
         continue
-    pa = street_words(p.get('address',''))
-    ps = p.get('suburb','').lower().strip()
-    best_match = None
-    best_score = 0
-    for d in domain:
-        ds = d.get('suburb','').lower().strip()
-        if ps and ds and ps not in ds and ds not in ps:
-            continue
-        da = street_words(d.get('address',''))
-        score = len(set(pa) & set(da))
-        if score > best_score:
-            best_score = score
-            best_match = d
-    if best_match and best_score >= 1:
+    best_match = domain_index.find(p.get('address', ''), p.get('suburb', ''))
+    if best_match:
         if not p.get('propertyType') and best_match.get('propertyType'): p['propertyType'] = best_match['propertyType']
         if not p.get('baths') and best_match.get('baths'): p['baths'] = best_match['baths']
         if not p.get('parking') and best_match.get('parking'): p['parking'] = best_match['parking']

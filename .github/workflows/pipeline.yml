@@ -143,6 +143,10 @@ jobs:
             echo "No change to index.html — skipping commit"
           else
             git commit -m "Daily update $(date -u '+%d %b %Y %H:%M') UTC"
+            # A code push during the run would otherwise reject this push and
+            # silently skip the day's deploy. The data update only touches the
+            # data blocks of index.html, so rebasing onto new code is safe.
+            git pull --rebase origin main
             git push
           fi
 

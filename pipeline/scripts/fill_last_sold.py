@@ -1,5 +1,9 @@
 import json, re
 from pathlib import Path
+# Strict same-property matching (see addr_match.py). The old rule matched any
+# shared word, including the suburb, so details were copied between
+# unrelated properties in the same suburb.
+from addr_match import AddressIndex
 
 APP_PATH = Path(__file__).resolve().parent.parent / "mazar_martin_app.html"
 
@@ -18,16 +22,14 @@ app = json.loads(m.group(1))
 sold = json.load(open(Path(__file__).resolve().parent.parent / 'domain_sold_lns.json'))
 
 filled = 0
+sold_index = AddressIndex(sold)
 for p in app:
     if p.get('lastSold'): continue
-    pa = p.get('address', '')
-    ps = p.get('suburb', '').lower()
-    for s in sold:
-        if match(pa, s.get('address', ''), ps, s.get('suburb', '').lower()):
-            if s.get('soldPrice'): p['lastSold'] = s['soldPrice']
-            if s.get('soldDate'): p['lastSoldDate'] = s['soldDate']
-            filled += 1
-            break
+    s = sold_index.find(p.get('address', ''), p.get('suburb', ''))
+    if s:
+        if s.get('soldPrice'): p['lastSold'] = s['soldPrice']
+        if s.get('soldDate'): p['lastSoldDate'] = s['soldDate']
+        filled += 1
 
 APP_PATH.write_text(html[:m.start(1)] + json.dumps(app) + html[m.end(1):], encoding="utf-8")
 print(f'Last sold filled: {filled}')
