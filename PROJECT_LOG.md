@@ -480,8 +480,18 @@ All 251 Mosman Proping listings typed "Apartment". Fixed with
 the 10 Apr data as baseline (dry run: 384 reverted, 133 cleared, 16 kept,
 982 copied guides cleared). Not repairable without original Domain data:
 type/baths/car/land filled since April on For Sale and Sold lists.
-- Still open: exact vs potential matches (decision); For Sale inventory
-  loader (dry run first); retire old URL + repo private (awaiting client
-  confirmation + David's GitHub 2FA).
+- Exact vs potential matches: decided to keep one list and label matches
+  that couldn't be fully checked ("Unconfirmed: price, bathrooms"). Most
+  unconfirmed ones are price ("Contact Agent" / blank guide).
+- For Sale inventory dry run (forsale-dryrun.yml, read-only; run 35225049959
+  on the 17 Sep morning scrape). Strict matching: For Sale 969 on Domain,
+  140 already in app, 829 would be added; 1073 of the app's 1265 For Sale
+  aren't on Domain's current list. Sold 1424 on Domain, 222 already in app,
+  1202 would be added. The old loader (inject_domain_scrape.py) must NOT be
+  switched on as is: its address match finds none of the existing ones (would
+  duplicate 140 For Sale + 222 Sold), it drops photo/land/list date, and it
+  prepends (breaks date order). Rework at the weekend.
+- Still open: retire old URL + repo private (awaiting client confirmation +
+  David's GitHub 2FA).
 
 ### (next session — append below)
