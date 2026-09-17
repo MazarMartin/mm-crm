@@ -30594,6 +30594,54 @@ function domainUrl(address, suburb, type) {
   return base + '?q=' + encodeURIComponent(q) + '&excludeunderoffer=0';
 }
 
+// ─── ShadeMap: sun and shade on a property ───────────────────────────────
+// Requested by Mon (Sep 2026) to share with clients. ShadeMap takes a
+// location in its URL: /@lat,lng,zoom z,time t,bearing b,pitch p,m.
+// The address is geocoded on click (same lookup the property maps use).
+// A window is opened synchronously first so pop-up blockers allow it, then
+// pointed at ShadeMap once the coordinates arrive.
+function _mmShadeMapUrl(lat, lng, approximate) {
+  return 'https://shademap.app/@' + lat + ',' + lng + ',' + (approximate ? '15' : '18') + 'z,' + Date.now() + 't,0b,0p,0m';
+}
+
+async function openShadeMap(address, suburb) {
+  let win = null;
+  try { win = window.open('about:blank', '_blank'); } catch (e) {}
+  let coords = null, approximate = false;
+  try { coords = await geocodeAddress(address || '', suburb || ''); } catch (e) {}
+  if (!coords) {
+    const key = String(suburb || '').toLowerCase().trim();
+    // Only a KNOWN suburb centre; getSuburbCoords() falls back to central
+    // Sydney, which would put ShadeMap in the wrong place.
+    if (typeof SUBURB_COORDS !== 'undefined' && SUBURB_COORDS[key]) {
+      coords = SUBURB_COORDS[key];
+      approximate = true;
+    }
+  }
+  if (!coords) {
+    if (win) try { win.close(); } catch (e) {}
+    showToast("Couldn't locate that address for ShadeMap");
+    return;
+  }
+  const url = _mmShadeMapUrl(coords[0], coords[1], approximate);
+  if (win && !win.closed) {
+    try { win.opener = null; } catch (e) {}
+    win.location.href = url;
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+  if (approximate) showToast('Exact address not found — ShadeMap is showing the suburb');
+}
+
+// Small ☀ button placed after an address. Data attributes carry the address
+// so apostrophes in street names can't break the markup.
+function _mmSunLink(address, suburb) {
+  if (!address) return '';
+  return ` <button type="button" title="Sun and shade on ShadeMap" data-a="${_swEsc(address)}" data-s="${_swEsc(suburb || '')}"`
+    + ` onclick="event.stopPropagation();event.preventDefault();openShadeMap(this.dataset.a,this.dataset.s)"`
+    + ` style="border:none;background:none;cursor:pointer;font-size:12px;padding:0 2px;vertical-align:middle;line-height:1">☀</button>`;
+}
+
 function getSuburbCoords(suburb) {
   const key = (suburb||'').toLowerCase().trim();
   return SUBURB_COORDS[key] || [-33.8388, 151.2093];
@@ -33141,7 +33189,7 @@ function _clRenderResponseDeck(clientName, items, rootEl) {
         <div class="sw-overlay pass">Pass</div>
       </div>
       <div class="sw-body">
-        <div class="sw-addr">${_swEsc(p.address || '')}</div>
+        <div class="sw-addr">${_swEsc(p.address || '')}${_mmSunLink(p.address, p.suburb)}</div>
         ${hasMeta || pDate ? `<div class="sw-sub">${metaLine}${hasMeta && pDate ? ' · ' : ''}${pDate ? 'Presented ' + _swEsc(pDate) : ''}</div>` : ''}
         <div class="sw-comment">
           <div class="sw-comment-lbl">Anything you'd like to tell your agent about this one?</div>
@@ -33333,7 +33381,7 @@ function buildClientOwnProfileView(el, edits) {
             ${photoHtml}
             <div style="padding:12px 14px">
               <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
-                <div style="font-weight:600;color:#1C3A2A;font-size:14px;flex:1">${_swEsc(p.address || '')}</div>
+                <div style="font-weight:600;color:#1C3A2A;font-size:14px;flex:1">${_swEsc(p.address || '')}${_mmSunLink(p.address, p.suburb)}</div>
                 ${badge}
               </div>
               ${hasMeta || pDate ? `<div style="font-size:12px;color:var(--text-mid);margin-top:4px">
@@ -35678,6 +35726,7 @@ function _swCardHTML(l) {
         ${lastSoldHtml}
       </div>
       <a class="sw-link" href="${_swEsc(reaUrl)}" target="_blank" rel="noopener">View on realestate.com.au ↗</a>
+      <a class="sw-link" href="#" data-a="${_swEsc(l.address || '')}" data-s="${_swEsc(l.suburb || '')}" onclick="event.preventDefault();event.stopPropagation();openShadeMap(this.dataset.a,this.dataset.s)">☀ Sun &amp; shade on ShadeMap ↗</a>
       <div class="sw-comment">
         <div class="sw-comment-lbl">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
@@ -37525,7 +37574,7 @@ function filterForSale() {
     const _lastSoldCell = (_pdSale || _vgSale || _lsData || _lsEdit.soldPrice) ? `<div style="font-size:11px;font-weight:600">${_lsPriceShown}</div>${_lsDateFmt ? '<div style="font-size:9px;color:#888">'+_lsDateFmt+'</div>' : ''}${_vgExtra}` : '<span style="color:#ccc">—</span>';
     return `<tr${l._soldFlag ? ' style="opacity:0.5"' : ''}>
       <td>${badge}</td>
-      <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_piHeritageBadges}</td>
+      <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_mmSunLink(l.address, l.suburb)}${_piHeritageBadges}</td>
       <td><span class="suburb-pill">${l.suburb||'—'}</span></td>
       <td style="text-align:center">${_getZoneBadge(l.address||'', l.suburb||'', l.propertyType||l.type||'')}</td>
       <td style="font-size:11px">${l.propertyType||l.type||'—'}</td>
@@ -37961,7 +38010,7 @@ function filterOffMarket() {
     const _omLastSoldCell = (_omPdSale || _omVgSale || _omLs || _omLsEdit.soldPrice) ? `<div style="font-size:11px;font-weight:600">${_omLsPriceShown}</div>${_omLsDateFmt ? '<div style="font-size:9px;color:#888">'+_omLsDateFmt+'</div>' : ''}${_omVgExtra}` : '<span style="color:#ccc">—</span>';
     return `<tr>
     <td>${statusBadge}${newBadge}</td>
-    <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_omHeritageBadges}</td>
+    <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_mmSunLink(l.address, l.suburb)}${_omHeritageBadges}</td>
     <td><span class="suburb-pill">${l.suburb||'—'}</span></td>
     <td style="text-align:center">${_getZoneBadge(l.address||'', l.suburb||'', l.propertyType||l.type||'')}</td>
     <td style="font-size:11px">${l.propertyType||l.type||'—'}</td>
