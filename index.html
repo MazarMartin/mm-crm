@@ -30978,6 +30978,8 @@ function showTab(id, el) {
 // function declaration becomes a window property.
 window.mmApplyClientRoster = function(roster) {
   D.xlsxClients = Array.isArray(roster) ? roster : [];
+  // Sold-price edits arrive with the same hydration; apply before re-render.
+  try { _mmApplySoldEdits(); } catch (e) { console.warn('[MM] apply sold edits failed', e); }
 
   // The commission tracker holds its own name/section list. Mutate in
   // place — window.MM_CLIENTS and the IIFE's const point at the same array.
@@ -37394,7 +37396,10 @@ function filterForSale() {
     const _lsDateFmt = _lsDate ? (function(d){ try { var dt = new Date(d); return dt.toLocaleDateString('en-AU',{day:'2-digit',month:'2-digit',year:'2-digit'}); } catch(e){ return d; } })(_lsDate) : '';
     const _lsSrc = _pdSale ? 'prop' : (_vgSale ? 'vg' : (_lsData ? 'app' : ''));
     const _vgExtra = _vgAll.length > 1 ? `<div style="font-size:9px;color:var(--gold);cursor:pointer" title="${_vgAll.slice(1,4).map(s=>s.date+': '+s.price).join(' | ')}">${_vgAll.length} sales ▾</div>` : '';
-    const _lastSoldCell = (_pdSale || _vgSale || _lsData) ? `<div style="font-size:11px;font-weight:600">${_lsPrice}</div>${_lsDateFmt ? '<div style="font-size:9px;color:#888">'+_lsDateFmt+'</div>' : ''}${_vgExtra}` : '<span style="color:#ccc">—</span>';
+    // A manual sold price fills in only where the historical record is missing or withheld.
+    const _lsEdit = _mmSoldEditFor(l.address||'', l.suburb||'');
+    const _lsPriceShown = (_lsEdit.soldPrice && (!_lsPrice || _lsPrice === '—' || /withheld/i.test(_lsPrice))) ? _lsEdit.soldPrice : _lsPrice;
+    const _lastSoldCell = (_pdSale || _vgSale || _lsData || _lsEdit.soldPrice) ? `<div style="font-size:11px;font-weight:600">${_lsPriceShown}</div>${_lsDateFmt ? '<div style="font-size:9px;color:#888">'+_lsDateFmt+'</div>' : ''}${_vgExtra}` : '<span style="color:#ccc">—</span>';
     return `<tr${l._soldFlag ? ' style="opacity:0.5"' : ''}>
       <td>${badge}</td>
       <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_piHeritageBadges}</td>
@@ -37479,11 +37484,93 @@ function saveForSaleEdit(key, field, value) {
   showToast('Saved');
 }
 
+// ─── Manual sold-price edits, everywhere ────────────────────────────────
+// The Sold tab lets staff type in a sold price (most Proping sales arrive
+// "Price Withheld"). Those edits used to show only on the Sold tab; the
+// dashboard's recently-sold card, the MM Report, client profile medians and
+// the "last sold" columns kept the original figure. Rather than patch every
+// display, the edits are applied to the underlying sold records once after
+// loading and after each edit, so every screen reads the corrected price.
+//
+// Edit keys are the address with punctuation stripped. Older sold records
+// spell addresses "17 Holdsworth Street Neutral Bay NSW" while Proping ones
+// use "21 Wallace Street, Willoughby", so keys are normalised without a
+// trailing NSW/postcode before matching.
+function _mmNormAddrKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+    .replace(/(nsw)?\d{4}$/, '').replace(/nsw$/, '');
+}
+
+let _mmSoldIdxRaw = null, _mmSoldIdxCache = {};
+function _mmSoldEditIndex() {
+  // Cached against the raw stored value: tables call this for every row, and
+  // a re-sync from another user's edit changes the raw string.
+  let raw = '{}';
+  try { raw = localStorage.getItem('mmSoldEdits') || '{}'; } catch (e) {}
+  if (raw === _mmSoldIdxRaw) return _mmSoldIdxCache;
+  const edits = lsGet('mmSoldEdits', {}) || {};
+  const idx = {};
+  for (const [k, v] of Object.entries(edits)) {
+    if (v && typeof v === 'object') idx[_mmNormAddrKey(k)] = v;
+  }
+  _mmSoldIdxRaw = raw;
+  _mmSoldIdxCache = idx;
+  return idx;
+}
+
+// A usable manual price for this property, or '' — "Price Withheld" typed
+// back in isn't a correction, so it doesn't override anything.
+function _mmSoldEditFor(address, suburb, idx) {
+  idx = idx || _mmSoldEditIndex();
+  const street = String(address || '').replace(/,.*$/, '');
+  for (const k of [_mmNormAddrKey(address), _mmNormAddrKey(street + ' ' + (suburb || ''))]) {
+    const e = k && idx[k];
+    if (!e) continue;
+    const sp = String(e.soldPrice || '').trim();
+    const gp = String(e.guidePrice || '').trim();
+    return {
+      soldPrice: sp && !/withheld/i.test(sp) ? sp : '',
+      guidePrice: gp,
+    };
+  }
+  return { soldPrice: '', guidePrice: '' };
+}
+
+function _mmApplySoldEdits() {
+  const idx = _mmSoldEditIndex();
+  // Remember each record's original values the first time, so clearing an
+  // edit restores what was scraped and re-applying is harmless.
+  const apply = (obj, soldField, guideField, priceField) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (!('_mmOrigSold' in obj)) {
+      obj._mmOrigSold = obj[soldField] || '';
+      obj._mmOrigGuide = guideField ? (obj[guideField] || '') : '';
+      obj._mmOrigPrice = priceField ? (obj[priceField] || '') : '';
+    }
+    const e = _mmSoldEditFor(obj.address, obj.suburb, idx);
+    obj[soldField] = e.soldPrice || obj._mmOrigSold;
+    if (guideField) obj[guideField] = e.guidePrice || obj._mmOrigGuide;
+    if (priceField) {
+      // Proping sold rows also carry `price`; several screens show that first.
+      const orig = obj._mmOrigPrice;
+      const placeholder = !orig || /withheld/i.test(orig) || orig === obj._mmOrigSold;
+      obj[priceField] = (e.soldPrice && placeholder) ? e.soldPrice : orig;
+    }
+  };
+  for (const l of (D.soldListings || [])) apply(l, 'soldPrice', 'guidePrice', null);
+  if (typeof propingHistory !== 'undefined') {
+    for (const day of propingHistory) {
+      for (const s of (day.sold || [])) apply(s, 'sold_price', 'price_guide', 'price');
+    }
+  }
+}
+
 function saveSoldEdit(key, field, value) {
   const edits = lsGet('mmSoldEdits', {});
   if (!edits[key]) edits[key] = {};
   edits[key][field] = value;
   lsSet('mmSoldEdits', edits);
+  try { _mmApplySoldEdits(); } catch (e) { console.warn('[MM] apply sold edits failed', e); }
   // Re-render to update diff %
   filterSold();
   showToast('Saved');
@@ -37745,7 +37832,9 @@ function filterOffMarket() {
     const _omLsDate = _omPdSale ? _omPdSale.date : (_omVgSale ? _omVgSale.date : (_omLs ? (_omLs.soldDate||_omLs.date||'') : ''));
     const _omLsDateFmt = _omLsDate ? (function(d){ try { var dt = new Date(d); return dt.toLocaleDateString('en-AU',{day:'2-digit',month:'2-digit',year:'2-digit'}); } catch(e){ return d; } })(_omLsDate) : '';
     const _omVgExtra = _omVgAll.length > 1 ? `<div style="font-size:9px;color:var(--gold);cursor:pointer" title="${_omVgAll.slice(1,4).map(s=>s.date+': '+s.price).join(' | ')}">${_omVgAll.length} sales ▾</div>` : '';
-    const _omLastSoldCell = (_omPdSale || _omVgSale || _omLs) ? `<div style="font-size:11px;font-weight:600">${_omLsPrice}</div>${_omLsDateFmt ? '<div style="font-size:9px;color:#888">'+_omLsDateFmt+'</div>' : ''}${_omVgExtra}` : '<span style="color:#ccc">—</span>';
+    const _omLsEdit = _mmSoldEditFor(l.address||'', l.suburb||'');
+    const _omLsPriceShown = (_omLsEdit.soldPrice && (!_omLsPrice || _omLsPrice === '—' || /withheld/i.test(_omLsPrice))) ? _omLsEdit.soldPrice : _omLsPrice;
+    const _omLastSoldCell = (_omPdSale || _omVgSale || _omLs || _omLsEdit.soldPrice) ? `<div style="font-size:11px;font-weight:600">${_omLsPriceShown}</div>${_omLsDateFmt ? '<div style="font-size:9px;color:#888">'+_omLsDateFmt+'</div>' : ''}${_omVgExtra}` : '<span style="color:#ccc">—</span>';
     return `<tr>
     <td>${statusBadge}${newBadge}</td>
     <td style="font-weight:600">${url ? `<a href="${url}" target="_blank" style="color:inherit">${l.address||'—'}</a>` : (l.address||'—')}${_omHeritageBadges}</td>
@@ -41555,6 +41644,7 @@ _injectSpreadsheetData();
   }, 100);
 
   try { _syncPropingToTabs(); } catch(e) { console.error('_syncPropingToTabs error:', e); }
+  try { _mmApplySoldEdits(); } catch(e) { console.error('_mmApplySoldEdits error:', e); }
   try { _enrichFromDomain(); } catch(e) { console.error('_enrichFromDomain error:', e); }
   try { _autoMatchNewListings(); } catch(e) { console.error('_autoMatchNewListings error:', e); }
   try { buildTabBar(); } catch(e) { console.error('buildTabBar error:', e); }
@@ -41570,6 +41660,7 @@ function _mmInitApp() {
   if (tb && tb.innerHTML.trim()) return; // already initialized
   console.log('[INIT] Running app initialization');
   try { _syncPropingToTabs(); } catch(e) { console.error('_syncPropingToTabs error:', e); }
+  try { _mmApplySoldEdits(); } catch(e) { console.error('_mmApplySoldEdits error:', e); }
   try { _enrichFromDomain(); } catch(e) { console.error('_enrichFromDomain error:', e); }
   try { _autoMatchNewListings(); } catch(e) { console.error('_autoMatchNewListings error:', e); }
   try { buildTabBar(); } catch(e) { console.error('buildTabBar error:', e); }
