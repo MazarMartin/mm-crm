@@ -34104,7 +34104,7 @@ function toggleMatchRow(clientName, mode) {
         const sub = m.suburb || '';
         const price = m.guidePrice || m.price || '—';
         html += `<div class="match-card">
-          <span>${addr} · ${sub} · ${price}</span>
+          <span>${addr} · ${sub} · ${price}${_mmUnconfirmedBadge(_mmUnconfirmed(m, client))}</span>
           <span>
             <button class="btn-sm btn-gold" onclick="saveMatchForClient('${clientName}','${addr.replace(/'/g,"\\'")}','${sub}','${String(price).replace(/'/g,"\\'")}','Online','')">Save</button>
             <button class="btn-sm btn-outline" onclick="dismissMatch('${clientName}','${addr.toLowerCase().replace(/'/g,"\\'")}')">Skip</button>
@@ -34128,7 +34128,7 @@ function toggleMatchRow(clientName, mode) {
         const sub = m.suburb || '';
         const price = m.guidePrice || m.price || '—';
         html += `<div class="match-card">
-          <span>${addr} · ${sub} · ${price} · <span class="badge badge-gray">Off Market</span></span>
+          <span>${addr} · ${sub} · ${price} · <span class="badge badge-gray">Off Market</span>${_mmUnconfirmedBadge(_mmUnconfirmed(m, client))}</span>
           <span>
             <button class="btn-sm btn-gold" onclick="saveMatchForClient('${clientName}','${addr.replace(/'/g,"\\'")}','${sub}','${String(price).replace(/'/g,"\\'")}','Off Market','')">Save</button>
             <button class="btn-sm btn-outline" onclick="dismissMatch('${clientName}','${addr.toLowerCase().replace(/'/g,"\\'")}')">Skip</button>
@@ -34696,7 +34696,7 @@ function openClientProfile(clientName) {
                   <div style="font-weight:700;font-size:15px;color:var(--text)">${l.address||''}${l.suburb ? ', ' + l.suburb : ''}</div>
                   <div style="font-size:12px;color:var(--text-mid);margin-top:3px">${l.propertyType||l.type||''} · ${l.beds||'?'} Bed · ${l.baths||'?'} Bath · ${l.parking||l.cars||'?'} Car${landSize ? ' · ' + landSize : ''}</div>
                 </div>
-                ${srcBadge}
+                <span style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end">${srcBadge}${_mmUnconfirmedBadge(_mmUnconfirmed(l, merged))}</span>
               </div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
                 <span style="font-weight:700;color:var(--green);font-size:16px">${l.guidePrice||l.price||'—'}</span>
@@ -35460,6 +35460,38 @@ function _matchesClientBrief(listing, client, locs) {
   return true;
 }
 
+// ─── Exact vs unconfirmed matches ───────────────────────────────────────
+// _matchesClientBrief() leaves a property in when a detail is MISSING (so a
+// good property isn't hidden over a blank field) and only excludes it when
+// the detail is known and falls short. That means a match can be exact
+// (every requirement checked and met) or unconfirmed (some requirement
+// couldn't be checked). Decided with Mazar Martin (Sep 2026): keep one list
+// in date order and label the unconfirmed ones with what's unknown.
+// Mirrors the checks in _matchesClientBrief exactly.
+function _mmUnconfirmed(listing, client) {
+  if (!listing || !client) return [];
+  const spec = _parseSpecCriteria(client.spec);
+  const out = [];
+  const minBeds = parseInt(client.prefBeds) || spec.minBeds || 0;
+  const minBaths = parseInt(client.prefBaths) || spec.minBaths || 0;
+  const minCar = parseInt(client.prefCar) || spec.minParking || 0;
+  const wantsType = !!(client.prefType || (spec.types || []).length);
+  const budget = _parseBudgetRange(client.budget);
+  if (budget.max > 0 && !(parsePrice(listing.guidePrice || listing.price || '') > 0)) out.push('price');
+  if (minBeds && !(parseInt(listing.beds || listing.bed || 0) > 0)) out.push('bedrooms');
+  if (minBaths && !(parseInt(listing.baths || listing.bath || 0) > 0)) out.push('bathrooms');
+  if (minCar && !(parseInt(listing.parking || listing.car || 0) > 0)) out.push('car spaces');
+  if (wantsType && !String(listing.propertyType || listing.type || '').trim()) out.push('property type');
+  return out;
+}
+
+function _mmUnconfirmedBadge(unknown) {
+  if (!unknown || !unknown.length) return '';
+  return ` <span class="badge" title="Not in the listing details, so this couldn't be checked against the client's brief. Check before presenting."`
+    + ` style="background:#FFF4E5;color:#B45309;border:1px solid #F5C77E;font-size:9px;padding:2px 8px;border-radius:var(--r-pill);font-weight:700;white-space:nowrap;vertical-align:middle">`
+    + `Unconfirmed: ${_swEsc(unknown.join(', '))}</span>`;
+}
+
 function _getForSaleMatches(locs, client) {
   return (D.sampleListings || []).filter(l => _matchesClientBrief(l, client, locs));
 }
@@ -35657,12 +35689,12 @@ function _swGetQueue(clientName, locs, client) {
 
   const fs = _getNewListings7d(locs, client)
     .filter(briefMatch)
-    .map(l => ({...l, _src: 'online'}));
+    .map(l => ({...l, _src: 'online', _mmUnknown: _mmUnconfirmed(l, client)}));
 
   const om = _omMatchPool().filter(l => {
     const d = _parseFlexDate(l.listDate || l.date || '');
     return d && d >= sevenAgo && briefMatch(l);
-  }).map(l => ({...l, _src: 'offmkt'}));
+  }).map(l => ({...l, _src: 'offmkt', _mmUnknown: _mmUnconfirmed(l, client)}));
 
   let combined = _swDedupe([...fs, ...om]);
   combined.sort((a,b) => {
@@ -35713,7 +35745,7 @@ function _swCardHTML(l) {
       <div class="sw-overlay pass">Pass</div>
     </div>
     <div class="sw-body">
-      <div class="sw-addr">${_swEsc(l.address||'')}</div>
+      <div class="sw-addr">${_swEsc(l.address||'')}${_mmUnconfirmedBadge(l._mmUnknown)}</div>
       <div class="sw-sub">${_swEsc(l.suburb||'')}${type ? ' · ' + _swEsc(type) : ''}${listedDate ? ' · Listed ' + _swEsc(listedDate) : ''}</div>
       <div class="sw-bbl">
         <div class="sw-bbl-item"><div class="sw-bbl-val">${_swEsc(beds)}</div><div class="sw-bbl-lbl">Bed</div></div>
