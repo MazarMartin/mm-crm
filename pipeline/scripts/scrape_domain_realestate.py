@@ -29,7 +29,9 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -453,6 +455,16 @@ _scrapfly_credits = 0   # running total so the log shows what a run costs
 # Observed cost of one Domain listing page through Scrapfly ASP:
 # 25 credits residential proxy + 5 browser usage. Used for preflight sizing.
 CREDITS_PER_PAGE = 30
+# Counters are updated from several threads on the Scrapfly path.
+_stats_lock = threading.Lock()
+# Result of the credit check, recorded for health_check.py.
+_preflight = {}
+# Pages fetched at once through Scrapfly. Sequential fetching took ~45 min a
+# night (150 pages at ~18 s each). That matters doubly once the repo is
+# private, because GitHub Actions minutes then count against a monthly
+# allowance. Kept conservative; a 429 from Scrapfly backs off and retries.
+_fetcher = 'browser'   # set in main(); recorded in the stats file
+SCRAPFLY_CONCURRENCY = max(1, int(os.environ.get('SCRAPFLY_CONCURRENCY', '4') or 4))
 
 
 def _get_scrapfly_key():
@@ -492,6 +504,8 @@ def _scrapfly_preflight(api_key, pages_planned):
         return True
 
     need = pages_planned * CREDITS_PER_PAGE
+    _preflight.update({'plan': plan, 'credits_remaining': left, 'credits_needed': need,
+                       'refused': left < need})
     print(f'  Scrapfly plan: {plan} — {left:,} credits remaining, '
           f'~{need:,} needed for this run')
     if left < need:
@@ -532,22 +546,36 @@ def _fetch_via_scrapfly(url, api_key):
         'country': 'au',
         'retry': 'true',
     })
-    req = urllib.request.Request(f'https://api.scrapfly.io/scrape?{params}')
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            payload = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')[:200]
-        print(f'      ⚠ scrapfly HTTP {e.code}: {body}')
-        return None
-    except Exception as e:
-        print(f'      ⚠ scrapfly error: {e}')
+    req_url = f'https://api.scrapfly.io/scrape?{params}'
+    payload = None
+    # 429 = over the plan's concurrency limit; 5xx = transient. Back off and
+    # retry rather than recording the page as blocked.
+    for attempt, wait in enumerate((0, 8, 20, 45)):
+        if wait:
+            time.sleep(wait)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(req_url), timeout=120) as resp:
+                payload = json.loads(resp.read().decode('utf-8'))
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')[:200]
+            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                continue
+            print(f'      ⚠ scrapfly HTTP {e.code}: {body}')
+            return None
+        except Exception as e:
+            if attempt < 3:
+                continue
+            print(f'      ⚠ scrapfly error: {e}')
+            return None
+    if payload is None:
         return None
 
     result = payload.get('result') or {}
     cost = (payload.get('context') or {}).get('cost') or result.get('cost') or {}
     if isinstance(cost, dict):
-        _scrapfly_credits += int(cost.get('total') or 0)
+        with _stats_lock:
+            _scrapfly_credits += int(cost.get('total') or 0)
     status = result.get('status_code')
     if status and status != 200:
         print(f'      ⚠ scrapfly upstream status {status}')
@@ -564,7 +592,7 @@ def _is_access_denied(html):
     return False
 
 
-def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=''):
+def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key='', log=None):
     """Scrape one suburb through N pages on Domain.
 
     When scrapfly_key is set every page is fetched through Scrapfly's ASP
@@ -573,6 +601,9 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=
     global _denied_pages, _ok_pages
     results = []
     display = slug.replace('-', ' ').title()
+    # When suburbs run in parallel, lines are collected and printed as one
+    # block per suburb so the log stays readable.
+    say = log.append if log is not None else print
 
     for page_num in range(1, max_pages + 1):
         if sold:
@@ -586,7 +617,7 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=
                    f'{state.lower()}-{postcode}/?excludeunderoffer=0'
                    f'&page={page_num}')
 
-        print(f'    page {page_num}: {url[:90]}…')
+        say(f'    page {page_num}: {url[:90]}…')
 
         got = []
         page = None
@@ -624,10 +655,12 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=
             # bother parsing. When this fires there's no __NEXT_DATA__ to look
             # at — the parse would just silently produce zero listings.
             if _is_access_denied(html):
-                _denied_pages += 1
-                print(f'      🚫 BLOCKED / no content ({len(html or "")} bytes)')
+                with _stats_lock:
+                    _denied_pages += 1
+                say(f'      🚫 BLOCKED / no content ({len(html or "")} bytes)')
             else:
-                _ok_pages += 1
+                with _stats_lock:
+                    _ok_pages += 1
                 # Prefer structured JSON
                 listings = _extract_from_next_data(html)
                 if listings:
@@ -648,9 +681,9 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=
                             r['suburb'] = display
 
         except PWTimeout:
-            print(f'      ⚠ timeout')
+            say(f'      ⚠ timeout')
         except Exception as e:
-            print(f'      ⚠ error: {e}')
+            say(f'      ⚠ error: {e}')
         finally:
             try:
                 if page is not None:
@@ -658,7 +691,7 @@ def scrape_suburb(context, slug, state, postcode, sold, max_pages, scrapfly_key=
             except Exception:
                 pass
 
-        print(f'      +{len(got)} listings')
+        say(f'      +{len(got)} listings')
         results.extend(got)
 
         if len(got) == 0:
@@ -736,6 +769,8 @@ def main():
 
     print('=' * 60)
     scrapfly_key = '' if args.no_scrapfly else _get_scrapfly_key()
+    global _fetcher
+    _fetcher = 'scrapfly' if scrapfly_key else 'browser'
     fetcher = 'scrapfly (ASP)' if scrapfly_key else f'local browser ({_DRIVER})'
     print(f'  Domain Scraper — via {fetcher}')
     print(f'  {datetime.now().strftime("%A %d %B %Y  %H:%M")}')
@@ -769,9 +804,31 @@ def main():
         # Sized on the worst case: every suburb, every page, both feeds.
         planned = len(suburbs) * args.pages * ((1 if do_listed else 0) + (1 if do_sold else 0))
         if not _scrapfly_preflight(scrapfly_key, planned):
+            _write_stats('scrapfly', refused=True)
             sys.exit(2)
-        # No browser needed at all — Scrapfly returns finished HTML.
-        run_suburbs(None)
+        # No browser needed at all — Scrapfly returns finished HTML. Each
+        # suburb/feed is independent, so run several at once.
+        tasks = [(slug, state, postcode, sold)
+                 for slug, state, postcode in suburbs
+                 for sold in ([False] if do_listed else []) + ([True] if do_sold else [])]
+        print(f'  fetching {len(tasks)} suburb feeds, {SCRAPFLY_CONCURRENCY} at a time')
+
+        def one(task):
+            slug, state, postcode, sold = task
+            lines = []
+            props = scrape_suburb(None, slug, state, postcode, sold=sold,
+                                  max_pages=args.pages, scrapfly_key=scrapfly_key, log=lines)
+            return task, props, lines
+
+        with ThreadPoolExecutor(max_workers=SCRAPFLY_CONCURRENCY) as pool:
+            for fut in as_completed([pool.submit(one, t) for t in tasks]):
+                (slug, _st, _pc, sold), props, lines = fut.result()
+                kind = 'Sold' if sold else 'For Sale'
+                print(f'\n▶ {slug.replace("-", " ").title()} ── {kind}')
+                for line in lines:
+                    print(line)
+                print(f'    total {kind.lower()}: {len(props)}')
+                (all_sold if sold else all_listed).extend(props)
     else:
         _run_with_browser(run_suburbs)
 
@@ -832,6 +889,25 @@ def _run_with_browser(run_suburbs):
                 pass
 
 
+STATS_PATH = SCRIPT_DIR.parent / 'domain_scrape_stats.json'
+
+
+def _write_stats(fetcher, **extra):
+    """Record what this run achieved, for health_check.py to judge."""
+    try:
+        STATS_PATH.write_text(json.dumps({
+            'finished': datetime.now().isoformat(timespec='seconds'),
+            'fetcher': fetcher,
+            'pages_ok': _ok_pages,
+            'pages_denied': _denied_pages,
+            'credits_used': _scrapfly_credits,
+            'preflight': _preflight,
+            **extra,
+        }, indent=2), encoding='utf-8')
+    except Exception as e:
+        print(f'  (could not write {STATS_PATH.name}: {e})')
+
+
 def _finish(all_listed, all_sold, args, do_listed, do_sold):
     """Dedupe, report, and write the three output files."""
     all_listed = dedupe(all_listed, sold=False)
@@ -886,6 +962,7 @@ def _finish(all_listed, all_sold, args, do_listed, do_sold):
         encoding='utf-8',
     )
     print(f'  Saved {OUTPUT_LEGACY.name}')
+    _write_stats(_fetcher, new_forsale=len(all_listed), new_sold=len(all_sold))
     print('=' * 60)
 
 

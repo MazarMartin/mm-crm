@@ -8,11 +8,13 @@ name: Daily pipeline (scrape + deploy)
 
 on:
   schedule:
-    # 19:00 UTC daily = 05:00 AEST (UTC+10) / 06:00 AEDT (UTC+11, ~Oct-Apr).
-    # Pipeline takes ~90-130 min (Playwright on Domain + OnTheHouse), so this
-    # finishes deploying around 06:30-07:00 AEST. Cron is 26 min after the
-    # Proping email arrival (~04:34 AEST = 18:34 UTC) to keep that buffer.
-    - cron: '0 19 * * *'
+    # 19:17 UTC daily = 05:17 AEST (UTC+10) / 06:17 AEDT (UTC+11, ~Oct-Apr).
+    # Proping emails arrive ~04:45 local, so this runs after them. Not on the
+    # hour on purpose: GitHub queues top-of-the-hour schedules heavily, and a
+    # 05:00 start was observed beginning 2h16m late (Sep 2026). With Scrapfly
+    # fetching in parallel the run takes ~15-20 min, so data should be live
+    # well before staff start. Late Proping emails are picked up by catchup.yml.
+    - cron: '17 19 * * *'
   workflow_dispatch:
 
 permissions:
@@ -104,12 +106,30 @@ jobs:
           # browser and returns zero listings (photos still come from the
           # Proping emails, but baths/car/type/land go unfilled).
           SCRAPFLY_API_KEY: ${{ secrets.SCRAPFLY_API_KEY }}
+          # Domain pages fetched at once through Scrapfly (was sequential,
+          # ~45 min). Lower it if Scrapfly starts returning 429s.
+          SCRAPFLY_CONCURRENCY: '4'
           PYTHONUTF8: '1'
           # Runner is UTC; scrape_gmail.py uses dt.astimezone() (the system local zone)
           # to stamp each email's date, so without this a 4:34 AM AEST email lands as
           # the previous UTC day — that's why the dashboard "today" pills showed zeros.
           TZ: Australia/Sydney
         run: python pipeline/scripts/run_pipeline.py --no-deploy
+
+      # Checks what the run actually produced (Proping details parsing,
+      # Scrapfly pages/credits, scrapers refreshing, off-market emails
+      # arriving, For Sale freshness) and emails a plain-English alert when a
+      # source breaks or goes quiet, plus a fortnightly all-clear summary.
+      # Never blocks the deploy.
+      - name: Data health check
+        if: always()
+        continue-on-error: true
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          HEALTH_ALERT_TO: david@tavoautomation.com
+          PYTHONUTF8: '1'
+          TZ: Australia/Sydney
+        run: python pipeline/scripts/health_check.py
 
       - name: Copy refreshed master to index.html
         run: cp pipeline/mazar_martin_app.html index.html

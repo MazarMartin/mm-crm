@@ -13,6 +13,7 @@ Usage:
     python run_pipeline.py --skip-scrapers # skip the 4 scraper steps (offline)
     python run_pipeline.py --dry-run       # print the plan; run nothing
 """
+import json
 import os
 import sys
 import shutil
@@ -107,6 +108,10 @@ def deploy():
 
 def main():
     skip_scrapers = "--skip-scrapers" in sys.argv
+    # --email-only: re-read the inbox and rebuild from it, reusing the last
+    # website scrapes. Used by the midday catch-up run when Proping sends late;
+    # it must not re-run the Scrapfly/Domain step (credits) or slow scrapers.
+    email_only = "--email-only" in sys.argv
     do_deploy = "--no-deploy" not in sys.argv
     dry_run = "--dry-run" in sys.argv
 
@@ -136,6 +141,10 @@ def main():
             print(f"\n--- Step {label}: SKIPPED (--skip-scrapers) ---")
             timings.append((label, 0.0, 'skipped'))
             continue
+        if email_only and script in SCRAPERS and script != "scrape_gmail.py":
+            print(f"\n--- Step {label}: SKIPPED (--email-only) ---")
+            timings.append((label, 0.0, 'skipped'))
+            continue
         problem = run_step(label, script, timings)
         if problem:
             failures.append(problem)
@@ -157,6 +166,19 @@ def main():
         print(f"\n  {len(failures)} step(s) had problems (run continued anyway):")
         for f in failures:
             print(f"    - {f}")
+
+    # Machine-readable record of this run for health_check.py, which runs
+    # straight after and reports failed steps / sources that didn't refresh.
+    try:
+        (PIPELINE / "last_run.json").write_text(json.dumps({
+            "started": pipeline_started.isoformat(timespec="seconds"),
+            "finished": datetime.now().isoformat(timespec="seconds"),
+            "mode": "email-only" if email_only else ("skip-scrapers" if skip_scrapers else "full"),
+            "steps": [{"label": l, "seconds": round(sec, 1), "status": st} for l, sec, st in timings],
+            "failures": failures,
+        }, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"  (could not write last_run.json: {e})")
 
     print(f"\nDONE at {datetime.now():%Y-%m-%d %H:%M:%S}")
 

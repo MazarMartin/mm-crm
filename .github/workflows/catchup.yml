@@ -1,0 +1,119 @@
+name: Midday catch-up (late Proping / off-market emails)
+
+# Proping usually emails around 4:45am, before the nightly run (pipeline.yml).
+# Some days it sends late (observed 11:30am and 2pm), and those emails used to
+# wait until the next morning to appear in the app. This workflow checks the
+# inbox twice a day and, only if something new has arrived since the last run,
+# re-reads email and rebuilds the app from it.
+#
+# It deliberately does NOT re-run the website scrapers or Scrapfly (credits,
+# time); it reuses their last results from the shared pipeline cache. Every
+# step it runs is standard-library Python, so no dependencies are installed.
+# A quiet day costs about a minute of Actions time.
+
+on:
+  schedule:
+    # 01:37 UTC = 11:37 AEST / 12:37 AEDT; 05:37 UTC = 15:37 AEST / 16:37 AEDT.
+    # Off the hour on purpose (GitHub delays top-of-hour schedules).
+    - cron: '37 1 * * *'
+    - cron: '37 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages      # queue behind the nightly run / other deploys, never overlap
+  cancel-in-progress: false
+
+jobs:
+  catchup:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # Same rolling cache as pipeline.yml: restores the most recent pipeline
+      # state (scrape results, Proping history, last_run.json, health state)
+      # and saves this run's state back for the next run.
+      - name: Restore pipeline state
+        uses: actions/cache@v4
+        with:
+          path: |
+            pipeline/*.json
+            pipeline/scripts/*.json
+          key: pipeline-state-${{ github.run_id }}
+          restore-keys: |
+            pipeline-state-
+
+      - name: Anything new since the last run?
+        id: check
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PYTHONUTF8: '1'
+          TZ: Australia/Sydney
+        run: python pipeline/scripts/check_new_email.py
+
+      - name: Seed master HTML from deployed index.html
+        if: steps.check.outputs.new_mail == 'true'
+        run: cp index.html pipeline/mazar_martin_app.html
+
+      - name: Rebuild from email (scrapers skipped)
+        if: steps.check.outputs.new_mail == 'true'
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          PYTHONUTF8: '1'
+          TZ: Australia/Sydney
+        run: python pipeline/scripts/run_pipeline.py --email-only --no-deploy
+
+      - name: Data health check
+        if: steps.check.outputs.new_mail == 'true'
+        continue-on-error: true
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          HEALTH_ALERT_TO: david@tavoautomation.com
+          PYTHONUTF8: '1'
+          TZ: Australia/Sydney
+        run: python pipeline/scripts/health_check.py
+
+      - name: Copy refreshed master to index.html
+        if: steps.check.outputs.new_mail == 'true'
+        run: cp pipeline/mazar_martin_app.html index.html
+
+      - name: Commit refreshed index.html
+        id: commit
+        if: steps.check.outputs.new_mail == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No change to index.html — skipping commit"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Catch-up update $(date -u '+%d %b %Y %H:%M') UTC"
+            git pull --rebase origin main
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # GitHub Pages deploy, same as pipeline.yml. Cloudflare Pages builds
+      # from the push on its own. Remove these three steps at the hosting
+      # cutover along with the ones in pipeline.yml.
+      - uses: actions/configure-pages@v5
+        if: steps.commit.outputs.changed == 'true'
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.commit.outputs.changed == 'true'
+        with:
+          path: '.'
+      - id: deployment
+        if: steps.commit.outputs.changed == 'true'
+        uses: actions/deploy-pages@v4
