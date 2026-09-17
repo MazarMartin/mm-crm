@@ -30980,6 +30980,8 @@ window.mmApplyClientRoster = function(roster) {
   D.xlsxClients = Array.isArray(roster) ? roster : [];
   // Sold-price edits arrive with the same hydration; apply before re-render.
   try { _mmApplySoldEdits(); } catch (e) { console.warn('[MM] apply sold edits failed', e); }
+  // Clients only see properties that fit their own brief (no-op for staff).
+  try { _mmApplyClientViewFilter(); } catch (e) { console.warn('[MM] client view filter failed', e); }
 
   // The commission tracker holds its own name/section list. Mutate in
   // place — window.MM_CLIENTS and the IIFE's const point at the same array.
@@ -31467,6 +31469,7 @@ function buildDashboard() {
 
   let html = `
     <div class="page-title">Dashboard</div>
+    ${_mmClientViewNote()}
     <div class="page-sub">Lower North Shore Property Intelligence · Updated ${today.toLocaleDateString('en-AU')}</div>
 
     <div id="smart-search-results" style="margin-bottom:16px"></div>
@@ -34252,6 +34255,95 @@ function _getPortalSuburbStats(locs, merged) {
 // modules (commission tracker etc.) that gate themselves on load can
 // reinitialise cleanly. Preview state is intentionally not persisted —
 // a refresh always drops you back to your real staff view.
+// ─── Client view: only properties that fit this client ──────────────────
+// Meeting item (16 Sep 2026): clients were seeing the whole market — every
+// suburb and price bracket — on their dashboard and listing tabs. When a
+// client is signed in (or staff use the 👁 client preview), the property
+// lists are narrowed once to that client's brief, so every screen that reads
+// them (dashboard KPIs and reports, For Sale, Off Market, Sold, maps, badges)
+// follows automatically. Staff sessions are never touched, and leaving the
+// preview reloads the page, restoring the full lists.
+//
+// For-sale and off-market properties must fit the whole brief (suburbs,
+// budget, beds/baths/car/type, tolerant of missing data like everywhere
+// else). Sold properties are matched on suburbs and property requirements
+// but not budget: comparable sales are useful context, and most recent sold
+// prices arrive withheld anyway.
+function _mmClientBrief() {
+  if (window.mmUserRole !== 'client') return null;
+  const name = String(window.mmUserClient || '').trim();
+  if (!name) return null;
+  const base = (D.xlsxClients || []).find(c => String(c.name || '').trim().toLowerCase() === name.toLowerCase()) || { name };
+  const edits = (lsGet('mmClientEdits', {}) || {})[base.name || name] || {};
+  const client = { ...base, ...edits };
+  const locs = String(client.locations || '').toLowerCase().split(/[,;]+/).map(x => x.trim()).filter(Boolean);
+  return { client, locs };
+}
+
+function _mmClientBriefSummary(b) {
+  if (!b) return '';
+  const c = b.client;
+  const parts = [];
+  if (b.locs.length) parts.push(b.locs.map(l => l.replace(/\b\w/g, ch => ch.toUpperCase())).join(', '));
+  if (String(c.budget || '').trim()) parts.push(String(c.budget).trim());
+  const beds = parseInt(c.prefBeds) || (_parseSpecCriteria(c.spec || '').minBeds || 0);
+  if (beds) parts.push(beds + '+ bed');
+  if (c.prefType) parts.push(c.prefType);
+  return parts.join(' · ');
+}
+
+function _mmApplyClientViewFilter() {
+  const b = _mmClientBrief();
+  if (!b) return;
+  // A client with no suburbs and no budget recorded would otherwise see
+  // nothing useful narrowed; show the full market rather than an odd subset.
+  if (!b.locs.length && !String(b.client.budget || '').trim()) return;
+
+  const fits = l => _matchesClientBrief(l, b.client, b.locs);
+  const soldClient = { ...b.client, budget: '' };
+  const fitsSold = l => _matchesClientBrief(l, soldClient, b.locs);
+
+  // Keep the originals once, so re-applying (e.g. after a re-sync) always
+  // filters from the full lists rather than an already-filtered one.
+  if (!D._mmFull) {
+    D._mmFull = {
+      sampleListings: D.sampleListings || [],
+      sampleOff: D.sampleOff || [],
+      soldListings: D.soldListings || [],
+    };
+  }
+  D.sampleListings = D._mmFull.sampleListings.filter(fits);
+  D.sampleOff = D._mmFull.sampleOff.filter(fits);
+  D.soldListings = D._mmFull.soldListings.filter(fitsSold);
+
+  if (typeof emailOffMarkets !== 'undefined' && Array.isArray(emailOffMarkets)) {
+    if (!window._mmFullEmailOff) window._mmFullEmailOff = emailOffMarkets.slice();
+    const kept = window._mmFullEmailOff.filter(fits);
+    emailOffMarkets.length = 0;
+    emailOffMarkets.push(...kept);
+  }
+  if (typeof propingHistory !== 'undefined') {
+    for (const day of propingHistory) {
+      if (!day._mmFull) day._mmFull = {};
+      for (const sec of ['newly_listed', 'price_changes', 'auction_changes', 'unlisted', 'over_90_days', 'sold']) {
+        if (!(sec in day._mmFull)) day._mmFull[sec] = day[sec] || [];
+        day[sec] = day._mmFull[sec].filter(sec === 'sold' ? fitsSold : fits);
+      }
+    }
+  }
+  console.log('[MM] client view narrowed to brief:', _mmClientBriefSummary(b),
+    '| for sale', D.sampleListings.length, '| off market', D.sampleOff.length, '| sold', D.soldListings.length);
+}
+
+// One line under each tab title telling the client why they see a subset.
+function _mmClientViewNote() {
+  const b = _mmClientBrief();
+  if (!b || (!b.locs.length && !String(b.client.budget || '').trim())) return '';
+  const summary = _mmClientBriefSummary(b);
+  if (!summary) return '';
+  return `<div style="margin:2px 0 14px;padding:8px 12px;border-radius:8px;background:#F5F9FC;border:1px solid #D6E3EC;font-size:12px;color:var(--text-mid)">Showing properties that match your brief: <strong style="color:var(--text)">${_swEsc(summary)}</strong></div>`;
+}
+
 function enterClientPreview(clientName) {
   if (!clientName) return;
   window.mmUserRole = 'client';
@@ -34259,6 +34351,7 @@ function enterClientPreview(clientName) {
   // Ensure the banner exists before anything else re-renders so the
   // staff never sees the client view without the "you're previewing" cue.
   _renderPreviewBanner(clientName);
+  try { _mmApplyClientViewFilter(); } catch (e) { console.warn('[MM] client view filter failed', e); }
   buildTabBar();
   showTab('dashboard');
 }
@@ -37246,6 +37339,35 @@ function _normSoldKey(address, suburb) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // FOR SALE TAB
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── Same-property address matching (mirrors pipeline/scripts/addr_match.py)
+// Two addresses are the same property only when street number (incl. unit),
+// street name and street type agree, and suburbs agree when both are known.
+// Replaces substring matching, which paired "4 Rawson Street" with
+// "14 Rawson Street" and showed the wrong last sale.
+const _MM_ST_TYPES = { street:'st', st:'st', road:'rd', rd:'rd', avenue:'ave', ave:'ave', av:'ave',
+  drive:'dr', dr:'dr', place:'pl', pl:'pl', court:'ct', ct:'ct', crescent:'cres', cres:'cres', cr:'cres',
+  parade:'pde', pde:'pde', terrace:'tce', tce:'tce', lane:'ln', ln:'ln', boulevard:'blvd', blvd:'blvd',
+  highway:'hwy', hwy:'hwy', close:'cl', cl:'cl', circuit:'cct', cct:'cct', grove:'gr', gr:'gr',
+  esplanade:'esp', esp:'esp', square:'sq', sq:'sq' };
+
+function _mmAddrKey(address, suburb) {
+  let a = String(address || '').toLowerCase().trim().replace(/\b\d{4}\s*$/, ' ').replace(/\bnsw\b/g, ' ');
+  const parts = a.split(',');
+  let street = parts[0];
+  let sub = String(suburb || (parts.length > 1 ? parts[1] : '')).toLowerCase()
+    .replace(/[^a-z ]/g, ' ').replace(/\bnsw\b/g, ' ').replace(/\s+/g, ' ').trim();
+  street = street.replace(/[^a-z0-9/ ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (sub && street.endsWith(' ' + sub)) street = street.slice(0, -sub.length).trim();
+  if (!/\d/.test(street)) return { street: '', sub: sub.replace(/ /g, '') };
+  return { street: street.split(' ').map(w => _MM_ST_TYPES[w] || w).join(''), sub: sub.replace(/ /g, '') };
+}
+
+function _mmSameProperty(addrA, subA, addrB, subB) {
+  const a = _mmAddrKey(addrA, subA), b = _mmAddrKey(addrB, subB);
+  if (!a.street || a.street !== b.street) return false;
+  return !a.sub || !b.sub || a.sub === b.sub;
+}
+
 function buildForSaleTab() {
   const el = document.getElementById('page-forsale');
   const suburbs = [...new Set((D.sampleListings||[]).map(l=>_mmCleanSuburb(l.suburb)).filter(Boolean))].sort();
@@ -37255,6 +37377,7 @@ function buildForSaleTab() {
 
   el.innerHTML = `
     <div class="page-title">For Sale</div>
+    ${_mmClientViewNote()}
     <div class="page-sub">${all.length} active listings across the Lower North Shore</div>
     ${buildRecentPriceChangesCard(7)}
     <div class="filter-bar">
@@ -37387,7 +37510,7 @@ function filterForSale() {
     const _vgAll = _vgEntry?.sales || [];
     const _lastSoldMatch = (D.soldListings||[]).filter(s => {
       const sa = (s.address||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-      return sa === _lsAddr || sa.includes(_lsAddr) || _lsAddr.includes(sa);
+      return _mmSameProperty(s.address, s.suburb, l.address, l.suburb);
     }).sort((a,b) => new Date(b.soldDate||b.date||0) - new Date(a.soldDate||a.date||0));
     const _lsData = _lastSoldMatch.length ? _lastSoldMatch[0] : null;
     // Priority: property.com.au → VG govt data → app soldListings
@@ -37648,6 +37771,7 @@ function buildOffMarketTab() {
 
   el.innerHTML = `
     <div class="page-title">Off Market</div>
+    ${_mmClientViewNote()}
     <div class="page-sub">${all.length} properties not listed on Domain or REA</div>
     <div class="filter-bar">
       <div class="filter-group"><label>Suburb</label><select id="om-suburb" onchange="filterOffMarket()"><option value="">All Suburbs</option>${suburbs.map(s=>`<option>${s}</option>`).join('')}</select></div>
@@ -37825,7 +37949,7 @@ function filterOffMarket() {
     const _omVgAll = _omVgEntry?.sales || [];
     const _omLastSold = (D.soldListings||[]).filter(s => {
       const sa = (s.address||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-      return sa === _omLsAddr || sa.includes(_omLsAddr) || _omLsAddr.includes(sa);
+      return _mmSameProperty(s.address, s.suburb, l.address, l.suburb);
     }).sort((a,b) => new Date(b.soldDate||b.date||0) - new Date(a.soldDate||a.date||0));
     const _omLs = _omLastSold.length ? _omLastSold[0] : null;
     const _omLsPrice = _omPdSale ? _omPdSale.price : (_omVgSale ? _omVgSale.price : (_omLs ? (_omLs.soldPrice||_omLs.price||'—') : '—'));
@@ -38331,6 +38455,7 @@ function buildSoldTab() {
 
   el.innerHTML = `
     <div class="page-title">Sold Properties</div>
+    ${_mmClientViewNote()}
     <div class="page-sub">${(D.soldListings||[]).length} recent sales across the Lower North Shore</div>
     ${buildRecentSoldCard(7)}
     <div class="filter-bar">
