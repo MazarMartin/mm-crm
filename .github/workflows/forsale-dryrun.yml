@@ -1,0 +1,45 @@
+name: For Sale inventory dry run (read-only)
+
+# Previews loading Domain's full For Sale / Sold inventory into the app.
+# Changes nothing: restores the last pipeline cache WITHOUT saving it back,
+# never commits, never deploys. Manual trigger only.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # restore-only: this job can never overwrite the pipeline's saved state
+      - name: Restore latest pipeline state (read-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            pipeline/*.json
+            pipeline/scripts/*.json
+          key: pipeline-state-dryrun-never-matches
+          restore-keys: |
+            pipeline-state-
+
+      - name: Seed master HTML from deployed index.html
+        run: cp index.html pipeline/mazar_martin_app.html
+
+      - name: Loader's own dry run
+        env:
+          PYTHONUTF8: '1'
+        run: python pipeline/scripts/inject_domain_scrape.py --dry-run
+
+      - name: Inventory report
+        env:
+          PYTHONUTF8: '1'
+        run: python pipeline/scripts/forsale_dryrun_report.py
